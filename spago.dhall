@@ -11,7 +11,23 @@ When creating a new Spago project, you can use
 to generate this file without the comments in this block.
 -}
 { name = "stream-container"
-, dependencies = [ "console", "effect", "prelude" ]
+, dependencies =
+  [ "arrays"
+  , "console"
+  , "datetime"
+  , "effect"
+  , "either"
+  , "formatters"
+  , "httpure"
+  , "integers"
+  , "maybe"
+  , "n3"
+  , "node-process"
+  , "partial"
+  , "prelude"
+  , "rdf"
+  , "refs"
+  ]
 , packages = ./packages.dhall
 , sources = [ "src/**/*.purs", "test/**/*.purs" ]
 }

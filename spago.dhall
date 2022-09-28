@@ -16,17 +16,17 @@ to generate this file without the comments in this block.
   , "console"
   , "datetime"
   , "effect"
-  , "either"
   , "formatters"
   , "httpure"
   , "integers"
   , "maybe"
   , "n3"
   , "node-process"
-  , "partial"
+  , "ordered-collections"
   , "prelude"
   , "rdf"
   , "refs"
+  , "strings"
   ]
 , packages = ./packages.dhall
 , sources = [ "src/**/*.purs", "test/**/*.purs" ]

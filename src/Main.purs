@@ -3,17 +3,21 @@ module Main where
 import Prelude
 
 import Data.Array (concat, dropEnd, length, mapWithIndex, range, (!!), (:))
-import Data.Either (Either, hush)
 import Data.Formatter.Interval (formatInterval)
 import Data.Int (fromString)
-import Data.Interval (Interval(..), second)
-import Data.Interval.Duration.Iso (IsoDuration, mkIsoDuration)
-import Data.Maybe (Maybe, fromJust, fromMaybe)
+import Data.Interval (Interval(..))
+import Data.Interval.Duration.Iso (IsoDuration)
+import Data.Map (lookup)
+import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Set (fromFoldable)
+import Data.String.CaseInsensitive (CaseInsensitiveString(..))
+import Effect.Class (liftEffect)
 import Effect.Console (log)
-import HTTPure (Request, ResponseM, ServerM, header, ok', serve)
-import N3 (Format(..), write)
+import Effect.Ref (Ref, modify_, new, read)
+import HTTPure (Method(..), Request, ResponseM, ServerM, created, header, notFound, ok', serve, toString)
+import HTTPure.Headers (Headers(..))
+import N3 (Format(..), parse, write)
 import Node.Process (argv)
-import Partial.Unsafe (unsafePartial)
 import RDF (Graph, Quad, Term, blankNode, defaultGraph, literalType, namedNode, namedNode', quad)
 import RDF.Prefixes (Prefix(..), ldp, rdf, xsd)
 
@@ -48,15 +52,31 @@ windowToQuads i (Window memberRelation membershipResource contentTimestampRelati
   where
     window = blankNode $ "window-" <> show i
 
-router :: Int -> Request -> ResponseM
-router port _ = do
-  payload <- write ("http://localhost:" <> show port <> "/") Turtle $ streamContainerToQuads emptyStreamContainer
+formatForMIME :: Maybe String -> Format
+formatForMIME (Just "text/turtle") = Turtle
+formatForMIME (Just "application/trig") = TriG
+formatForMIME (Just "application/n-triples") = NTriples
+formatForMIME (Just "application/n-quads") = NQuads
+formatForMIME Nothing = Turtle
+formatForMIME _ = Turtle
+
+router :: Int -> Ref StreamContainer -> Request -> ResponseM
+router port streamContainerRef { method: Get, path: [], headers: (Headers headers) } = do
+  streamContainer <- liftEffect $ read streamContainerRef
+  payload <- write ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Accept") headers) $ streamContainerToQuads streamContainer
   ok' (header "Content-Type" "text/turtle") payload
+router port streamContainerRef { method: Post, path: [], body, headers: (Headers headers) } = do
+  bodyString <- toString body
+  payload <- parse ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Content-Type") headers) bodyString
+  liftEffect $ modify_ (addGraphToStreamContainer $ fromFoldable payload) streamContainerRef
+  created
+router _ _ _ = notFound
 
 main :: ServerM
 main = do
+  streamContainerRef <- new emptyStreamContainer
   args <- argv
   let port = fromMaybe 8080 do
         portString <- args !! 2
         fromString portString
-  serve port (router port) $ log $ "Server now up on port " <> show port
+  serve port (router port streamContainerRef) $ log $ "Server now up on port " <> show port

@@ -3,6 +3,7 @@ module Main where
 import Prelude
 
 import Data.Array (concat, dropEnd, length, mapWithIndex, range, (!!), (:))
+import Data.Array as Array
 import Data.Formatter.Interval (formatInterval)
 import Data.Int (fromString)
 import Data.Interval (Interval(..))
@@ -14,7 +15,7 @@ import Data.String.CaseInsensitive (CaseInsensitiveString(..))
 import Effect.Class (liftEffect)
 import Effect.Console (log)
 import Effect.Ref (Ref, modify_, new, read)
-import HTTPure (Method(..), Request, ResponseM, ServerM, created, header, notFound, ok', serve, toString)
+import HTTPure (Method(..), Request, ResponseM, ServerM, created, header, notFound, ok', serve, toString, (!@))
 import HTTPure.Headers (Headers(..))
 import N3 (Format(..), parse, write)
 import Node.Process (argv)
@@ -33,6 +34,12 @@ emptyStreamContainer = StreamContainer [] []
 
 addGraphToStreamContainer :: Graph -> StreamContainer -> StreamContainer
 addGraphToStreamContainer graph (StreamContainer graphArray windowArray) = StreamContainer (graph : graphArray) windowArray
+
+getGraphFromStreamContainer :: Int -> StreamContainer -> Maybe Graph
+getGraphFromStreamContainer i (StreamContainer graphArray _) = graphArray !! i
+
+nextGraphId :: StreamContainer -> Int
+nextGraphId (StreamContainer graphArray _) = length graphArray
 
 streamContainerToQuads :: StreamContainer -> Array Quad
 streamContainerToQuads (StreamContainer graphArray windowArray) = [
@@ -61,15 +68,26 @@ formatForMIME Nothing = Turtle
 formatForMIME _ = Turtle
 
 router :: Int -> Ref StreamContainer -> Request -> ResponseM
+-- GET /
 router port streamContainerRef { method: Get, path: [], headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   payload <- write ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Accept") headers) $ streamContainerToQuads streamContainer
   ok' (header "Content-Type" "text/turtle") payload
+-- POST /
 router port streamContainerRef { method: Post, path: [], body, headers: (Headers headers) } = do
+  streamContainer <- liftEffect $ read streamContainerRef
   bodyString <- toString body
-  payload <- parse ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Content-Type") headers) bodyString
+  payload <- parse ("http://localhost:" <> show port <> "/" <> show (nextGraphId streamContainer)) (formatForMIME $ lookup (CaseInsensitiveString "Content-Type") headers) bodyString
   liftEffect $ modify_ (addGraphToStreamContainer $ fromFoldable payload) streamContainerRef
   created
+-- GET /{id}
+router port streamContainerRef { method: Get, path, headers: (Headers headers) } | length path == 1 = (liftEffect $ read streamContainerRef) >>= \streamContainer -> case fromString (path !@ 0) of 
+  Nothing -> notFound
+  Just i -> case getGraphFromStreamContainer i streamContainer of 
+    Nothing -> notFound
+    Just graph -> do
+      payload <- write ("http://localhost:" <> show port <> "/" <> show i) (formatForMIME $ lookup (CaseInsensitiveString "Accept") headers) $ Array.fromFoldable graph
+      ok' (header "Content-Type" "text/turtle") payload
 router _ _ _ = notFound
 
 main :: ServerM

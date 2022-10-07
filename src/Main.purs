@@ -30,7 +30,7 @@ ldpsc = Prefix "https://solid.ti.rw.fau.de/public/ns/stream-containers#"
 
 data StreamContainer = StreamContainer (Array Graph) (Array Window)
 
-data Window = Window Term Term Term IsoDuration
+data Window = Window Term Term Term IsoDuration IsoDuration
 
 emptyStreamContainer :: StreamContainer
 emptyStreamContainer = StreamContainer [] []
@@ -55,12 +55,13 @@ streamContainerToQuads (StreamContainer graphArray windowArray) = [
   (concat $ mapWithIndex windowToQuads windowArray)
 
 windowToQuads :: Int -> Window -> Array Quad
-windowToQuads i (Window memberRelation membershipResource contentTimestampRelation duration) = [
+windowToQuads i (Window memberRelation membershipResource contentTimestampRelation startDuration endDuration) = [
   quad (namedNode "") (namedNode' ldpsc "window") window defaultGraph,
   quad window (namedNode' ldp "hasMemberRelation") memberRelation defaultGraph,
   quad window (namedNode' ldp "hasMembershipResource") membershipResource defaultGraph,
   quad window (namedNode' ldpsc "hasContentTimestampRelation") contentTimestampRelation defaultGraph,
-  quad window (namedNode' ldpsc "logical") (literalType (formatInterval (DurationOnly duration)) (namedNode' xsd "string")) defaultGraph
+  quad window (namedNode' ldpsc "startDuration") (literalType (formatInterval (DurationOnly startDuration)) (namedNode' xsd "duration")) defaultGraph,
+  quad window (namedNode' ldpsc "endDuration") (literalType (formatInterval (DurationOnly endDuration)) (namedNode' xsd "duration")) defaultGraph
 ]
   where
     window = blankNode $ "window-" <> show i
@@ -70,9 +71,11 @@ quadsToWindow quads = do
   memberRelation <- head $ filter (\quad -> predicate quad == namedNode' ldp "hasMemberRelation") quads
   membershipResource <- head $ filter (\quad -> predicate quad == namedNode' ldp "hasMembershipResource") quads
   contentTimestampRelation <- head $ filter (\quad -> predicate quad == namedNode' ldpsc "hasContentTimestampRelation") quads
-  logical <- head $ filter (\quad -> predicate quad == namedNode' ldpsc "logical") quads :: Maybe Quad
-  duration <- hush $ runParser (value $ object logical) parseIsoDuration
-  pure $ Window (object memberRelation) (object membershipResource) (object contentTimestampRelation) duration
+  startDurationQuad <- head $ filter (\quad -> predicate quad == namedNode' ldpsc "startDuration") quads
+  startDuration <- hush $ runParser (value $ object startDurationQuad) parseIsoDuration
+  endDurationQuad <- head $ filter (\quad -> predicate quad == namedNode' ldpsc "endDuration") quads
+  endDuration <- hush $ runParser (value $ object endDurationQuad) parseIsoDuration
+  pure $ Window (object memberRelation) (object membershipResource) (object contentTimestampRelation) startDuration endDuration
 
 formatForMIME :: Maybe String -> Format
 formatForMIME (Just "text/turtle") = Turtle

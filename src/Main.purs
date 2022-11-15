@@ -2,10 +2,12 @@ module Main where
 
 import Prelude
 
+import CLI (window)
+import Control.Monad.Error.Class (try)
 import Data.Array (catMaybes, concat, dropEnd, filter, head, length, mapWithIndex, range, snoc, (!!))
 import Data.Array as Array
-import Data.DateTime (DateTime, adjust)
-import Data.Either (hush)
+import Data.DateTime (DateTime(..), adjust)
+import Data.Either (Either(..), hush)
 import Data.Foldable (foldl)
 import Data.Formatter.DateTime (Formatter, format)
 import Data.Formatter.DateTime as Formatter
@@ -23,13 +25,15 @@ import Data.Time.Duration (Milliseconds(..))
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (liftEffect)
 import Effect.Console (log)
+import Effect.Exception (message)
 import Effect.Now (nowDateTime)
 import Effect.Ref (Ref, modify_, new, read)
-import HTTPure (Method(..), Request, Response, ServerM, ResponseM, badRequest, created, header, notFound, ok', serve, toString, (!@))
+import HTTPure (Method(..), Request, Response, ResponseM, ServerM, badRequest, created, header, internalServerError, notFound, ok, ok', serve, toString, (!@))
 import HTTPure.Headers (Headers(..))
 import N3 (Format(..), parse, write)
 import Node.Process (argv)
-import Parsing (runParser)
+import Options.Applicative (ParseError, briefDesc, execParser, helper, info, progDesc, (<**>))
+import Parsing (parseErrorMessage, runParser)
 import RDF (Quad, Term, Graph, blankNode, defaultGraph, literalType, namedNode, namedNode', object, predicate, quad, value)
 import RDF.Prefixes (Prefix(..), ldp, rdf, xsd)
 
@@ -119,12 +123,24 @@ router :: Int -> Ref StreamContainer -> Request -> ResponseM
 -- GET /
 router port streamContainerRef request@{ method: Get, path: [], headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
-  now <- liftEffect $ nowDateTime
-  let time = fromMaybe now $ do
-        timeString <- lookup (CaseInsensitiveString "Accept-Datetime") headers
-        hush $ runParser timeString parseDateTime
-  payload <- write ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Accept") headers) $ streamContainerToQuads time streamContainer
-  logResponse request $ ok' (header "Content-Type" "text/turtle") payload
+  let headerMaybe = lookup (CaseInsensitiveString "Accept-Datetime") headers :: Maybe String
+  case headerMaybe of
+    Nothing -> do
+      time <- liftEffect nowDateTime
+      createSCPayload streamContainer time
+    Just timeString -> case runParser timeString parseDateTime of
+        Left error -> do
+          logWarn $ "Not able to parse Accept-Datetime of request: " <> show (parseErrorMessage error)
+          logResponse request $ badRequest $ "Not able to parse Accept-Datetime of request: " <> show (parseErrorMessage error)
+        Right time -> createSCPayload streamContainer time
+  where
+    createSCPayload streamContainer time = do
+      payload <- try $ write ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Accept") headers) $ streamContainerToQuads time streamContainer
+      case payload of 
+        Left error -> do
+          logError $ "Serializing Turtle for Stream Container failed: " <> message error
+          logResponse request $ internalServerError $ "Serializing Turtle for Stream Container failed: " <> message error
+        Right body -> logResponse request $ ok' (header "Content-Type" "text/turtle") body
 -- POST /
 router port streamContainerRef request@{ method: Post, path: [], body, headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
@@ -176,17 +192,42 @@ timeFormatter = List.fromFoldable [
 
 logResponse :: forall m. MonadAff m => Request -> m Response -> m Response
 logResponse { method, path } response = do
-  time <- liftEffect $ nowDateTime
   { status } <- response
-  liftEffect $ log $ "[" <> format timeFormatter time <> "] " <> toUpper (show method) <> " /" <> joinWith "/" path <> " " <> show status
+  logDebug $ toUpper (show method) <> " /" <> joinWith "/" path <> " " <> show status
   response
+
+logDebug :: forall m. MonadAff m => String -> m Unit
+logDebug message = do
+  time <- liftEffect $ nowDateTime
+  liftEffect $ log $ "[DEBUG]\t[" <> format timeFormatter time <> "] " <> message
+
+logInfo :: forall m. MonadAff m => String -> m Unit
+logInfo message = do
+  time <- liftEffect $ nowDateTime
+  liftEffect $ log $ "[INFO]\t[" <> format timeFormatter time <> "] " <> message
+
+logWarn :: forall m. MonadAff m => String -> m Unit
+logWarn message = do
+  time <- liftEffect $ nowDateTime
+  liftEffect $ log $ "[WARN]\t[" <> format timeFormatter time <> "] " <> message
+
+logError :: forall m. MonadAff m => String -> m Unit
+logError message = do
+  time <- liftEffect $ nowDateTime
+  liftEffect $ log $ "[ERROR]\t[" <> format timeFormatter time <> "] " <> message
 
 main :: ServerM
 main = do
   streamContainerRef <- new $ emptyStreamContainer
+  options <-liftEffect $ execParser opts
+  liftEffect $ log options
   args <- argv
   let port = fromMaybe 8080 do
         portString <- args !! 2
         Integer.fromString portString
   time <- liftEffect $ nowDateTime
-  serve port (router port streamContainerRef) $ log $ "[" <> format timeFormatter time <> "] Server up on port " <> show port
+  serve port (router port streamContainerRef) $ log $ "[INFO]\t[" <> format timeFormatter time <> "] Server up on port " <> show port
+    where
+    opts = info (window <**> helper)
+      ( briefDesc
+     <> progDesc "Start a Stream Container web server" )

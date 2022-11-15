@@ -7,20 +7,25 @@ import Data.Array as Array
 import Data.DateTime (DateTime, adjust)
 import Data.Either (hush)
 import Data.Foldable (foldl)
+import Data.Formatter.DateTime (Formatter, format)
+import Data.Formatter.DateTime as Formatter
 import Data.Formatter.Parser.Interval (parseDateTime)
 import Data.Int as Integer
+import Data.List as List
 import Data.Map (lookup)
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Number (fromString)
 import Data.Set (empty, fromFoldable, union)
 import Data.Set as Set
+import Data.String (joinWith, toUpper)
 import Data.String.CaseInsensitive (CaseInsensitiveString(..))
 import Data.Time.Duration (Milliseconds(..))
+import Effect.Aff.Class (class MonadAff)
 import Effect.Class (liftEffect)
 import Effect.Console (log)
 import Effect.Now (nowDateTime)
 import Effect.Ref (Ref, modify_, new, read)
-import HTTPure (Method(..), Request, ResponseM, ServerM, badRequest, created, header, notFound, ok', serve, toString, (!@))
+import HTTPure (Method(..), Request, Response, ServerM, ResponseM, badRequest, created, header, notFound, ok', serve, toString, (!@))
 import HTTPure.Headers (Headers(..))
 import N3 (Format(..), parse, write)
 import Node.Process (argv)
@@ -28,12 +33,13 @@ import Parsing (runParser)
 import RDF (Quad, Term, Graph, blankNode, defaultGraph, literalType, namedNode, namedNode', object, predicate, quad, value)
 import RDF.Prefixes (Prefix(..), ldp, rdf, xsd)
 
+-- RDF Prefix for Stream Containers
 ldpsc :: Prefix
 ldpsc = Prefix "https://solid.ti.rw.fau.de/public/ns/stream-containers#"
 
-data StreamContainer = StreamContainer (Array Graph) (Array Window)
-
 data Window = Window Term Term Term Milliseconds Milliseconds
+
+data StreamContainer = StreamContainer (Array Graph) (Array Window)
 
 emptyStreamContainer :: StreamContainer
 emptyStreamContainer = StreamContainer [] []
@@ -111,45 +117,69 @@ getUnionGraph (StreamContainer graphs _) = foldl union empty graphs
 
 router :: Int -> Ref StreamContainer -> Request -> ResponseM
 -- GET /
-router port streamContainerRef { method: Get, path: [], headers: (Headers headers) } = do
+router port streamContainerRef request@{ method: Get, path: [], headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   now <- liftEffect $ nowDateTime
   let time = fromMaybe now $ do
         timeString <- lookup (CaseInsensitiveString "Accept-Datetime") headers
         hush $ runParser timeString parseDateTime
   payload <- write ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Accept") headers) $ streamContainerToQuads time streamContainer
-  ok' (header "Content-Type" "text/turtle") payload
+  logResponse request $ ok' (header "Content-Type" "text/turtle") payload
 -- POST /
-router port streamContainerRef { method: Post, path: [], body, headers: (Headers headers) } = do
+router port streamContainerRef request@{ method: Post, path: [], body, headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   bodyString <- toString body
   payload <- parse ("http://localhost:" <> show port <> "/" <> show (nextGraphId streamContainer)) (formatForMIME $ lookup (CaseInsensitiveString "Content-Type") headers) bodyString
   liftEffect $ modify_ (addGraphToStreamContainer $ fromFoldable payload) streamContainerRef
-  created
+  logResponse request created
 -- GET /all
-router port streamContainerRef { method: Get, path : [ "all" ], headers: (Headers headers) } = do
+router port streamContainerRef request@{ method: Get, path : [ "all" ], headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   let graph = getUnionGraph streamContainer
   payload <- write ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Accept") headers) $ Array.fromFoldable graph
-  ok' (header "Content-Type" "text/turtle") payload
+  logResponse request $ ok' (header "Content-Type" "text/turtle") payload
 -- GET /{id}
-router port streamContainerRef { method: Get, path, headers: (Headers headers) } | length path == 1 = (liftEffect $ read streamContainerRef) >>= \streamContainer -> case Integer.fromString (path !@ 0) of 
-  Nothing -> notFound
+router port streamContainerRef request@{ method: Get, path, headers: (Headers headers) } | length path == 1 = (liftEffect $ read streamContainerRef) >>= \streamContainer -> case Integer.fromString (path !@ 0) of 
+  Nothing -> logResponse request notFound
   Just i -> case getGraphFromStreamContainer i streamContainer of 
-    Nothing -> notFound
+    Nothing -> logResponse request notFound
     Just graph -> do
       payload <- write ("http://localhost:" <> show port <> "/" <> show i) (formatForMIME $ lookup (CaseInsensitiveString "Accept") headers) $ Array.fromFoldable graph
-      ok' (header "Content-Type" "text/turtle") payload
+      logResponse request $ ok' (header "Content-Type" "text/turtle") payload
 -- POST /window
-router port streamContainerRef { method: Post, path: [ "window" ], body, headers: (Headers headers) } = do
+router port streamContainerRef request@{ method: Post, path: [ "window" ], body, headers: (Headers headers) } = do
   bodyString <- toString body
   payload <- parse ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Content-Type") headers) bodyString
   case addWindowToStreamContainer <$> quadsToWindow payload of 
-    Nothing -> badRequest "Could not parse window"
+    Nothing -> logResponse request $ badRequest "Could not parse window"
     Just window -> do
       liftEffect $ modify_ window streamContainerRef
-      created
-router _ _ _ = notFound
+      logResponse request created
+router _ _ request = logResponse request notFound
+
+timeFormatter :: Formatter
+timeFormatter = List.fromFoldable [
+  Formatter.YearFull,
+  Formatter.Placeholder "-",
+  Formatter.MonthTwoDigits,
+  Formatter.Placeholder "-",
+  Formatter.DayOfMonthTwoDigits,
+  Formatter.Placeholder " ",
+  Formatter.Hours24,
+  Formatter.Placeholder ":",
+  Formatter.MinutesTwoDigits,
+  Formatter.Placeholder ":",
+  Formatter.SecondsTwoDigits,
+  Formatter.Placeholder ".",
+  Formatter.MillisecondsTwoDigits
+]
+
+logResponse :: forall m. MonadAff m => Request -> m Response -> m Response
+logResponse { method, path } response = do
+  time <- liftEffect $ nowDateTime
+  { status } <- response
+  liftEffect $ log $ "[" <> format timeFormatter time <> "] " <> toUpper (show method) <> " /" <> joinWith "/" path <> " " <> show status
+  response
 
 main :: ServerM
 main = do
@@ -158,4 +188,5 @@ main = do
   let port = fromMaybe 8080 do
         portString <- args !! 2
         Integer.fromString portString
-  serve port (router port streamContainerRef) $ log $ "Server now up on port " <> show port
+  time <- liftEffect $ nowDateTime
+  serve port (router port streamContainerRef) $ log $ "[" <> format timeFormatter time <> "] Server up on port " <> show port

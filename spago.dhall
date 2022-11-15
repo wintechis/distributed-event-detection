@@ -12,7 +12,8 @@ to generate this file without the comments in this block.
 -}
 { name = "stream-container"
 , dependencies =
-  [ "arrays"
+  [ "aff"
+  , "arrays"
   , "console"
   , "datetime"
   , "debug"
@@ -22,6 +23,7 @@ to generate this file without the comments in this block.
   , "formatters"
   , "httpure"
   , "integers"
+  , "lists"
   , "maybe"
   , "n3"
   , "node-process"

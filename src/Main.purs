@@ -28,7 +28,7 @@ import Effect.Console (log)
 import Effect.Exception (message)
 import Effect.Now (nowDateTime)
 import Effect.Ref (Ref, modify_, new, read)
-import HTTPure (Method(..), Request, Response, ResponseM, ServerM, badRequest, created, header, internalServerError, notFound, ok, ok', serve, toString, (!@))
+import HTTPure (Method(..), Request, Response, ResponseM, ServerM, badRequest, created, header, internalServerError, notFound, ok', serve, toString, (!@))
 import HTTPure.Headers (Headers(..))
 import N3 (Format(..), parse, write)
 import Node.Process (argv)
@@ -108,13 +108,18 @@ quadsToWindow quads = do
   endDuration <- fromString $ value $ object endDurationQuad
   pure $ Window (object memberRelation) (object membershipResource) (object contentTimestampRelation) (Milliseconds startDuration) (Milliseconds endDuration)
 
-formatForMIME :: Maybe String -> Format
-formatForMIME (Just "text/turtle") = Turtle
-formatForMIME (Just "application/trig") = TriG
-formatForMIME (Just "application/n-triples") = NTriples
-formatForMIME (Just "application/n-quads") = NQuads
-formatForMIME Nothing = Turtle
+formatForMIME :: String -> Format
+formatForMIME "text/turtle" = Turtle
+formatForMIME "application/trig" = TriG
+formatForMIME "application/n-triples" = NTriples
+formatForMIME "application/n-quads" = NQuads
 formatForMIME _ = Turtle
+
+mimeForFormat :: Format -> String
+mimeForFormat Turtle = "text/turtle"
+mimeForFormat TriG = "application/trig"
+mimeForFormat NTriples = "application/n-triples"
+mimeForFormat NQuads = "application/n-quads"
 
 getUnionGraph :: StreamContainer -> Graph
 getUnionGraph (StreamContainer graphs _) = foldl union empty graphs
@@ -123,54 +128,75 @@ router :: Int -> Ref StreamContainer -> Request -> ResponseM
 -- GET /
 router port streamContainerRef request@{ method: Get, path: [], headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
-  let headerMaybe = lookup (CaseInsensitiveString "Accept-Datetime") headers :: Maybe String
-  case headerMaybe of
+  case lookup (CaseInsensitiveString "Accept-Datetime") headers of
+    -- No Accept-Datetime header in the request, use now
     Nothing -> do
       time <- liftEffect nowDateTime
       createSCPayload streamContainer time
     Just timeString -> case runParser timeString parseDateTime of
         Left error -> do
-          logWarn $ "Not able to parse Accept-Datetime of request: " <> show (parseErrorMessage error)
-          logResponse request $ badRequest $ "Not able to parse Accept-Datetime of request: " <> show (parseErrorMessage error)
+          logWarn $ "Not able to parse Accept-Datetime of request: " <> parseErrorMessage error
+          logResponse request $ badRequest $ "Not able to parse Accept-Datetime of request: " <> parseErrorMessage error
         Right time -> createSCPayload streamContainer time
   where
     createSCPayload streamContainer time = do
-      payload <- try $ write ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Accept") headers) $ streamContainerToQuads time streamContainer
+      -- serialize Triples for SC
+      let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
+      payload <- try $ write ("http://localhost:" <> show port <> "/") format $ streamContainerToQuads time streamContainer
       case payload of 
         Left error -> do
-          logError $ "Serializing Turtle for Stream Container failed: " <> message error
+          logError $ "Serializing triples for Stream Container failed: " <> message error
           logResponse request $ internalServerError $ "Serializing Turtle for Stream Container failed: " <> message error
-        Right body -> logResponse request $ ok' (header "Content-Type" "text/turtle") body
+        Right body -> logResponse request $ ok' (header "Content-Type" $ mimeForFormat format) body
 -- POST /
 router port streamContainerRef request@{ method: Post, path: [], body, headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   bodyString <- toString body
-  payload <- parse ("http://localhost:" <> show port <> "/" <> show (nextGraphId streamContainer)) (formatForMIME $ lookup (CaseInsensitiveString "Content-Type") headers) bodyString
-  liftEffect $ modify_ (addGraphToStreamContainer $ fromFoldable payload) streamContainerRef
-  logResponse request created
+  let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
+  payload <- try $ parse ("http://localhost:" <> show port <> "/" <> show (nextGraphId streamContainer)) format bodyString
+  case payload of 
+    Left error -> do
+      logError $ "Parsing request body failed: " <> message error
+      logResponse request $ badRequest $ "Parsing request body failed: " <> message error
+    Right quads -> do
+      liftEffect $ modify_ (addGraphToStreamContainer $ fromFoldable quads) streamContainerRef
+      logResponse request created
 -- GET /all
 router port streamContainerRef request@{ method: Get, path : [ "all" ], headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   let graph = getUnionGraph streamContainer
-  payload <- write ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Accept") headers) $ Array.fromFoldable graph
-  logResponse request $ ok' (header "Content-Type" "text/turtle") payload
+  let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
+  payload <- write ("http://localhost:" <> show port <> "/") format $ Array.fromFoldable graph
+  logResponse request $ ok' (header "Content-Type" $ mimeForFormat format) payload
 -- GET /{id}
 router port streamContainerRef request@{ method: Get, path, headers: (Headers headers) } | length path == 1 = (liftEffect $ read streamContainerRef) >>= \streamContainer -> case Integer.fromString (path !@ 0) of 
   Nothing -> logResponse request notFound
   Just i -> case getGraphFromStreamContainer i streamContainer of 
     Nothing -> logResponse request notFound
     Just graph -> do
-      payload <- write ("http://localhost:" <> show port <> "/" <> show i) (formatForMIME $ lookup (CaseInsensitiveString "Accept") headers) $ Array.fromFoldable graph
-      logResponse request $ ok' (header "Content-Type" "text/turtle") payload
+      let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
+      payload <- try $ write ("http://localhost:" <> show port <> "/" <> show i) format $ Array.fromFoldable graph
+      case payload of 
+        Left error -> do
+          logError $ "Serializing triples for contained resource failed: " <> message error
+          logResponse request $ internalServerError $ "Serializing triples for contained resource failed: " <> message error
+        Right rdf -> logResponse request $ ok' (header "Content-Type" $ mimeForFormat format) rdf
 -- POST /window
 router port streamContainerRef request@{ method: Post, path: [ "window" ], body, headers: (Headers headers) } = do
   bodyString <- toString body
-  payload <- parse ("http://localhost:" <> show port <> "/") (formatForMIME $ lookup (CaseInsensitiveString "Content-Type") headers) bodyString
-  case addWindowToStreamContainer <$> quadsToWindow payload of 
-    Nothing -> logResponse request $ badRequest "Could not parse window"
-    Just window -> do
-      liftEffect $ modify_ window streamContainerRef
-      logResponse request created
+  let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
+  payload <- try $ parse ("http://localhost:" <> show port <> "/") format bodyString
+  case payload of
+    Left error -> do
+      logError $ "Parsing request body failed: " <> message error
+      logResponse request $ internalServerError $ "Parsing request body failed: " <> message error
+    Right quads -> case addWindowToStreamContainer <$> quadsToWindow quads of 
+      Nothing -> do
+        logError $ "Triples in request body do not constitute a valid window"
+        logResponse request $ badRequest "Triples in request body do not constitute a valid window"
+      Just window -> do
+        liftEffect $ modify_ window streamContainerRef
+        logResponse request created
 router _ _ request = logResponse request notFound
 
 timeFormatter :: Formatter

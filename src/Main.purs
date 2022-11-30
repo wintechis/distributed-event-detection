@@ -2,98 +2,143 @@ module Main where
 
 import Prelude
 
-import Data.Exists (Exists, mkExists)
-import Data.List (List(..))
-import Data.Natural (Natural, intToNat)
+import Data.Array (length, (:))
+import Data.Array.Partial as Array
+import Data.Map (Map, empty, insert)
+import Data.Maybe (Maybe(..))
+import Data.String (joinWith)
+import Data.Tuple (Tuple(..))
+import Debug (trace)
 import Effect (Effect)
-import Effect.Console (logShow)
-import Type.Proxy (Proxy(..))
-import Unsafe.Coerce (unsafeCoerce)
+import Effect.Console (log, logShow)
 
--- Kind for type level natural numbers
-data Nat
-foreign import data N0 :: Nat
-foreign import data NSucc :: Nat -> Nat
-
-type N1 = NSucc N0
-type N2 = NSucc N1
-type N3 = NSucc N2
-type N4 = NSucc N3
-type N5 = NSucc N4
-
-class Add (n :: Nat) (m :: Nat) (o :: Nat) | n m -> o
-instance addZero :: Add N0 m N0
-instance addSucc :: Add n m o => Add (NSucc n) m (NSucc o)
-
--- Term lists track the number of terms to match with predicate arity
-data TermList (arity :: Nat) = TermList (List Term)
-
-tNil :: TermList N0
-tNil = TermList Nil
-
-tCons :: forall (n :: Nat). Term -> TermList n -> TermList (NSucc n)
-tCons term (TermList termlist) = TermList $ Cons term termlist
-
-infixr 6 tCons as :
-
-someTermList :: TermList N2
-someTermList = Constant "a" : Variable "b" : tNil
-
-type Time = Number
+type Time = Int
 
 data Interval = Interval Time Time
+instance showInterval :: Show Interval where
+  show (Interval start end) = "[" <> show start <> ", " <> show end <> "]"
+derive instance eqInterval :: Eq Interval
+derive instance ordInterval :: Ord Interval
 
 data Term = Variable String | Constant String
+instance showTerm :: Show Term where
+  show (Variable name) = "?" <> name
+  show (Constant name) = name
+derive instance eqTerm :: Eq Term
+derive instance ordTerm :: Ord Term
 
-data Predicate (arity :: Nat) = Predicate String
+data Predicate = Predicate String
+instance showPredicate :: Show Predicate where
+  show (Predicate name) = name
+derive instance eqPredicate :: Eq Predicate
+derive instance ordPredicate :: Ord Predicate
 
--- We need an existential type to match arity
-data PredicateFormula (n :: Nat) = PredicateFormula (Predicate n) (TermList n)
-type PredicateFormulaF = Exists PredicateFormula
+data Formula = Formula Predicate (Array Term) | BoxPlus Interval Formula -- | BoxMinus Interval Formula | DiamondPlus Interval Formula | DiamondMinus Interval Formula
+instance showFormula :: Show Formula where
+  show (Formula predicate terms) = show predicate <> "(" <> joinWith ", " (show <$> terms) <> ")"
+  show (BoxPlus interval formula) = "□+_" <> show interval <> " " <> show formula
+--  show (BoxMinus interval formula) = "□-_" <> show interval <> " " <> show formula
+--  show (DiamondPlus interval formula) = "◇+_" <> show interval <> " " <> show formula
+--  show (DiamondMinus interval formula) = "◇-_" <> show interval <> " " <> show formula
+derive instance eqFormula :: Eq Formula
+derive instance ordFormula :: Ord Formula
 
-data Formula = Formula PredicateFormulaF | Top | Bottom | BoxPlus Interval Formula
+formulaDepth :: Formula -> Int
+formulaDepth (Formula _ _) = 0
+formulaDepth (BoxPlus _ formula) = formulaDepth formula + 1
+--formulaDepth (BoxMinus _ formula) = formulaDepth formula + 1
+--formulaDepth (DiamondPlus _ formula) = formulaDepth formula + 1
+--formulaDepth (DiamondMinus _ formula) = formulaDepth formula + 1
 
-predicate :: forall (n :: Nat). Natural -> String -> Predicate n
-predicate arity name = Predicate name
+data Rule = Rule Formula (Array Formula)
+instance showRule :: Show Rule where
+  show (Rule head body) = show head <> " ← " <> joinWith " ∧ " (show <$> body)
 
-formula :: forall (n :: Nat). Predicate n -> TermList n -> Formula
-formula pred termlist = Formula $ mkExists $ PredicateFormula pred termlist
+type Program = Array Rule
 
-p = predicate (intToNat 3) "p"
+--lightjam :: Rule
+--lightjam = Rule (Formula (Predicate "light_jam") [ Variable "car" ]) [ BoxMinus (Interval 0 15) (Formula (Predicate "less_than") [ Variable "speed", Constant "30" ]) ]
+--
+--mediumjam :: Rule
+--mediumjam = Rule (Formula (Predicate "medium_jam") [ Variable "car" ]) [ Formula (Predicate "light_jam") [ Variable "car" ], DiamondMinus (Interval 0 30) (BoxMinus (Interval 0 3) (Formula (Predicate "speed") [ Variable "car", Constant "0" ])) ]
+--
+--heavyjam :: Rule
+--heavyjam = Rule (Formula (Predicate "heavy_jam") [ Variable "car" ]) [ Formula (Predicate "light_jam") [ Variable "car" ], BoxMinus (Interval 0 30) (DiamondMinus (Interval 0 10) (BoxMinus (Interval 0 3) (Formula (Predicate "speed") [ Variable "car", Constant "0" ]))) ]
+--
+--jam :: Program
+--jam = [ lightjam, mediumjam, heavyjam ]
 
+test :: Formula
+test = BoxPlus (Interval 3 10) (BoxPlus (Interval 4 15) (Formula (Predicate "p") [ Variable "a", Constant "c" ]))
 
-class NatToNatural :: Nat -> Constraint
-class NatToNatural nat where
-  reflectNat :: Proxy nat -> Natural
+f :: Formula -> Tuple Program (Tuple Predicate (Array Term))
+f (Formula predicate terms) = Tuple [] (Tuple predicate terms)
+f formula@(BoxPlus (Interval start end) (Formula (Predicate predicate) terms)) = Tuple [ Rule (Formula newPred terms) [ formula ] ] (Tuple newPred terms)
+  where
+    newPred = Predicate ("boxPlus_" <> show start <> "_" <> show end <> "_" <> predicate)
+f (BoxPlus (Interval start end) formula') = case f formula' of
+  Tuple prog (Tuple pred ts) -> Tuple (Rule (Formula (newPred pred) ts) [ BoxPlus (Interval start end) (Formula pred ts) ] : prog) (Tuple (newPred pred) ts)
+    where
+      newPred (Predicate predicate) = Predicate ("boxPlus_" <> show start <> "_" <> show end <> "_" <> predicate)
+--f mapff formula@(BoxPlus (Interval start end) formula') = (f empty formula') (\(Tuple f mf) -> Tuple (insert _ _ mf) f)
+--  where
+--    newFormula = Formula (Predicate (predicate <> "_BoxPlus_" <> show start <> "_" <> show end)) terms
 
-instance n0ToNatural :: NatToNatural N0 where
-  reflectNat _ = intToNat 0
-
-instance nsuccToNatural :: NatToNatural n => NatToNatural (NSucc n) where
-  reflectNat _ = intToNat 1
-
-test :: forall (n :: Nat). Proxy n -> Effect Unit
-test proxy = logShow $ reflectNat proxy
+--ruleBody :: Rule -> Array Formula
+--ruleBody (Rule _ body) = body
+--
+--ruleHead :: Rule -> Formula
+--ruleHead (Rule head _) = head
+--
+--normalForm :: Program -> Program
+--normalForm program = program
+--
+--isFormula :: Formula -> Boolean
+--isFormula (Formula _ _) = true
+--isFormula _ = false
+--
+--normalForm' :: Partial => Rule -> Program
+--normalForm' (Rule head body) = map replace body
+--  where
+--    replace :: Formula -> Tuple Formula Program
+--    replace formula = case formula of
+--      f@(Formula _ _) -> Tuple f []
+--      f -> Tuple (unfoldFormula f (Formula (Predicate "")) )
+--normalForm' (Rule head body) | length body == 1 = if formulaDepth (Array.head body) > 0 then
+--  [
+--  ]
+--  else 
+--  []
+--normalForm' _ = []
+--
+--unfoldFormula :: Formula -> Array Rule -> Formula -> Program
+--unfoldFormula head accu (Formula predicate terms) = trace accu \_ -> Rule head [ Formula predicate terms ] : accu
+--unfoldFormula head accu f@(BoxPlus _ (Formula (Predicate _) _)) = Rule head [ f ] : accu
+--unfoldFormula head accu f@(BoxMinus _ (Formula (Predicate _) _)) = Rule head [ f ] : accu
+--unfoldFormula head accu f@(DiamondPlus _ (Formula (Predicate _) _)) = Rule head [ f ] : accu
+--unfoldFormula head accu f@(DiamondMinus _ (Formula (Predicate _) _)) = Rule head [ f ] : accu
+--unfoldFormula head@(Formula (Predicate predicate) terms) accu (BoxPlus interval@(Interval start end) formula) = unfoldFormula newFormula (accu <> [ Rule head [ BoxPlus interval newFormula ] ]) formula
+--  where
+--    newFormula = Formula (Predicate $ predicate <> "_BoxPlus_" <> show start <> "_" <> show end) terms
+--unfoldFormula head@(Formula (Predicate predicate) terms) accu (BoxMinus interval@(Interval start end) formula) = unfoldFormula newFormula (accu <> [ Rule head [ BoxMinus interval newFormula ] ]) formula
+--  where
+--    newFormula = Formula (Predicate $ predicate <> "_BoxMinus_" <> show start <> "_" <> show end) terms
+--unfoldFormula head@(Formula (Predicate predicate) terms) accu (DiamondPlus interval@(Interval start end) formula) = unfoldFormula newFormula (accu <> [ Rule head [ DiamondPlus interval newFormula ] ]) formula
+--  where
+--    newFormula = Formula (Predicate $ predicate <> "_DiamondPlus_" <> show start <> "_" <> show end) terms
+--unfoldFormula head@(Formula (Predicate predicate) terms) accu (DiamondMinus interval@(Interval start end) formula) = unfoldFormula newFormula (accu <> [ Rule head [ DiamondMinus interval newFormula ] ]) formula
+--  where
+--    newFormula = Formula (Predicate $ predicate <> "_DiamondMinus_" <> show start <> "_" <> show end) terms
+--
+--nextFormula :: Formula -> Maybe Formula
+--nextFormula (Formula _ _) = Nothing
+--nextFormula (BoxPlus _ formula) = Just formula
+--nextFormula (BoxMinus _ formula) = Just formula
+--nextFormula (DiamondPlus _ formula) = Just formula
+--nextFormula (DiamondMinus _ formula) = Just formula
 
 main :: Effect Unit
 main = do
-  test (Proxy :: Proxy N1)
-
---class Reifies s a | s -> a where
---  reflect :: Proxy s -> a
---
---reify :: forall a r. a -> (forall s. Reifies s a => Proxy s -> r) -> r
---reify a f = coerce f { reflect: \_ -> a } Proxy where
---  coerce :: (forall s. Reifies s a => Proxy s -> r) -> { reflect :: Proxy Unit -> a } -> Proxy Unit -> r
---  coerce = unsafeCoerce
---
---instance reifiesN0Natural :: Reifies N0 Natural where
---  reflect Proxy = intToNat 0
---instance reifiesN1Natural :: Reifies N1 Natural where
---  reflect Proxy = intToNat 1
-
-exFormula :: Formula
-exFormula = formula p tNil
-
-ex2Formula :: Formula
-ex2Formula = formula p (Constant "t" : tNil)
+  logShow test
+  logShow $ f test
+  --logShow $ unfoldFormula (Formula (Predicate "medium_jam") [ Variable "car" ]) [] $ DiamondMinus (Interval 0 30) (BoxMinus (Interval 0 3) (Formula (Predicate "speed") [ Variable "car", Constant "0" ]))

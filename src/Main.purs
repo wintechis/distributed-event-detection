@@ -4,7 +4,11 @@ import Prelude
 
 import Data.Exists (Exists, mkExists)
 import Data.List (List(..))
+import Data.Natural (Natural, intToNat)
+import Effect (Effect)
+import Effect.Console (logShow)
 import Type.Proxy (Proxy(..))
+import Unsafe.Coerce (unsafeCoerce)
 
 -- Kind for type level natural numbers
 data Nat
@@ -49,13 +53,44 @@ type PredicateFormulaF = Exists PredicateFormula
 
 data Formula = Formula PredicateFormulaF | Top | Bottom | BoxPlus Interval Formula
 
-predicate :: forall (n :: Nat). Proxy n -> String -> Predicate n
-predicate _ name = Predicate name
+predicate :: forall (n :: Nat). Natural -> String -> Predicate n
+predicate arity name = Predicate name
 
 formula :: forall (n :: Nat). Predicate n -> TermList n -> Formula
 formula pred termlist = Formula $ mkExists $ PredicateFormula pred termlist
 
-p = predicate Proxy "p"
+p = predicate (intToNat 3) "p"
+
+
+class NatToNatural :: Nat -> Constraint
+class NatToNatural nat where
+  reflectNat :: Proxy nat -> Natural
+
+instance n0ToNatural :: NatToNatural N0 where
+  reflectNat _ = intToNat 0
+
+instance nsuccToNatural :: NatToNatural n => NatToNatural (NSucc n) where
+  reflectNat _ = intToNat 1
+
+test :: forall (n :: Nat). Proxy n -> Effect Unit
+test proxy = logShow $ reflectNat proxy
+
+main :: Effect Unit
+main = do
+  test (Proxy :: Proxy N1)
+
+--class Reifies s a | s -> a where
+--  reflect :: Proxy s -> a
+--
+--reify :: forall a r. a -> (forall s. Reifies s a => Proxy s -> r) -> r
+--reify a f = coerce f { reflect: \_ -> a } Proxy where
+--  coerce :: (forall s. Reifies s a => Proxy s -> r) -> { reflect :: Proxy Unit -> a } -> Proxy Unit -> r
+--  coerce = unsafeCoerce
+--
+--instance reifiesN0Natural :: Reifies N0 Natural where
+--  reflect Proxy = intToNat 0
+--instance reifiesN1Natural :: Reifies N1 Natural where
+--  reflect Proxy = intToNat 1
 
 exFormula :: Formula
 exFormula = formula p tNil

@@ -2,7 +2,7 @@ module Main where
 
 import Prelude
 
-import Data.Array (concatMap, filter, (:))
+import Data.Array (concatMap, filter, mapWithIndex, (:))
 import Data.Array as Array
 import Data.Map (Map, fromFoldable)
 import Data.Map as Map
@@ -12,6 +12,8 @@ import Data.String (joinWith)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Console (log, logShow)
+import Node.Encoding (Encoding(..))
+import Node.FS.Sync (writeTextFile)
 
 type Time = Int
 
@@ -148,9 +150,17 @@ getIntervallsForPredicates program = fromFoldable $ Set.map (\p -> Tuple p (getI
 showIntervalForPredicates :: Map Predicate (Set Interval) -> String
 showIntervalForPredicates fiMap = joinWith "\n" $ map (\(Tuple predicate intervals) -> show predicate <> ":\t" <> (joinWith ", " $ map show $ Array.fromFoldable intervals)) $ Map.toUnfoldable fiMap
 
+dockerCompose :: Program -> String
+dockerCompose program = "services:\n" <> (joinWith "\n" $ mapWithIndex (\i (Tuple predicate intervals) -> "  " <> show predicate <> "-stream-container:\n" <> "    environment:\n      - PORT=" <> show (9000 + i) <> "\n      - WINDOWS=" <> show (Set.toUnfoldable intervals :: Array Interval) <> "\n    ports:\n      - \"" <> show (9000 + i) <> ":" <> show (9000 + i) <> "\"\n    image: stream-container:latest") streamContainerList)
+  where
+    streamContainerList :: Array (Tuple Predicate (Set Interval))
+    streamContainerList = Map.toUnfoldable $ getIntervallsForPredicates $ normalForm program
+
 main :: Effect Unit
 main = do
   logShow jam
   logShow $ normalForm jam
   logShow $ programPredicates $ normalForm jam
   log $ showIntervalForPredicates $ getIntervallsForPredicates $ normalForm jam
+  log $ dockerCompose $ normalForm jam
+  writeTextFile UTF8 "docker-compose.yml" (dockerCompose $ normalForm jam)

@@ -15,6 +15,8 @@ to generate this file without the comments in this block.
   [ "arrays"
   , "console"
   , "effect"
+  , "node-buffer"
+  , "node-fs"
   , "ordered-collections"
   , "prelude"
   , "strings"

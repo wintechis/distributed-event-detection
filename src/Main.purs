@@ -3,16 +3,23 @@ module Main where
 import Prelude
 
 import Data.Array (concatMap, filter, (:))
+import Data.Array as Array
+import Data.Map (Map, fromFoldable)
+import Data.Map as Map
+import Data.Set (Set)
+import Data.Set as Set
 import Data.String (joinWith)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
-import Effect.Console (logShow)
+import Effect.Console (log, logShow)
 
 type Time = Int
 
 data Interval = Interval Time Time
 instance showInterval :: Show Interval where
   show (Interval start end) = "[" <> show start <> ", " <> show end <> "]"
+derive instance eqInterval :: Eq Interval
+derive instance ordInterval :: Ord Interval
 
 data Term = Variable String | Constant String
 instance showTerm :: Show Term where
@@ -22,6 +29,8 @@ instance showTerm :: Show Term where
 data Predicate = Predicate String
 instance showPredicate :: Show Predicate where
   show (Predicate name) = name
+derive instance eqPredicate :: Eq Predicate
+derive instance ordPredicate :: Ord Predicate
 
 data Formula = Formula Predicate (Array Term) | BoxPlus Interval Formula | BoxMinus Interval Formula | DiamondPlus Interval Formula | DiamondMinus Interval Formula
 instance showFormula :: Show Formula where
@@ -109,7 +118,39 @@ normalRule (Rule head body) = [ Rule head (map (\(Tuple _ (Tuple predicate terms
 normalForm :: Program -> Program
 normalForm = concatMap normalRule
 
+formulaPredicate :: Formula -> Predicate
+formulaPredicate (Formula predicate _) = predicate
+formulaPredicate (BoxPlus _ formula) = formulaPredicate formula
+formulaPredicate (BoxMinus _ formula) = formulaPredicate formula
+formulaPredicate (DiamondPlus _ formula) = formulaPredicate formula
+formulaPredicate (DiamondMinus _ formula) = formulaPredicate formula
+
+rulePredicates :: Rule -> Set Predicate
+rulePredicates (Rule head body) = Set.insert (formulaPredicate head) (Set.fromFoldable $ map formulaPredicate body)
+
+programPredicates :: Program -> Set Predicate
+programPredicates program = Set.unions $ map rulePredicates program
+
+getIntervallsForPredicates :: Program -> Map Predicate (Set Interval)
+getIntervallsForPredicates program = fromFoldable $ Set.map (\p -> Tuple p (getIntervallsForPredicate p)) (programPredicates program)
+  where
+    getIntervallsForPredicate :: Predicate -> Set Interval
+    getIntervallsForPredicate predicate = Set.fromFoldable $ concatMap (\(Rule head body) -> getIntervallsForPredicateFormula head <> concatMap getIntervallsForPredicateFormula body) program
+      where
+        getIntervallsForPredicateFormula :: Formula -> Array Interval
+        getIntervallsForPredicateFormula (Formula _ _) = []
+        getIntervallsForPredicateFormula (BoxPlus interval (Formula predicate' _)) = if predicate == predicate' then [ interval ] else []
+        getIntervallsForPredicateFormula (BoxMinus interval (Formula predicate' _)) = if predicate == predicate' then [ interval ] else []
+        getIntervallsForPredicateFormula (DiamondPlus interval (Formula predicate' _)) = if predicate == predicate' then [ interval ] else []
+        getIntervallsForPredicateFormula (DiamondMinus interval (Formula predicate' _)) = if predicate == predicate' then [ interval ] else []
+        getIntervallsForPredicateFormula _ = []
+
+showIntervalForPredicates :: Map Predicate (Set Interval) -> String
+showIntervalForPredicates fiMap = joinWith "\n" $ map (\(Tuple predicate intervals) -> show predicate <> ":\t" <> (joinWith ", " $ map show $ Array.fromFoldable intervals)) $ Map.toUnfoldable fiMap
+
 main :: Effect Unit
 main = do
   logShow jam
   logShow $ normalForm jam
+  logShow $ programPredicates $ normalForm jam
+  log $ showIntervalForPredicates $ getIntervallsForPredicates $ normalForm jam

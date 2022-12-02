@@ -4,7 +4,7 @@ import Prelude
 
 import Data.Array (concatMap, filter, mapWithIndex, (:))
 import Data.Array as Array
-import Data.Map (Map, fromFoldable)
+import Data.Map (Map, fromFoldable, toUnfoldable)
 import Data.Map as Map
 import Data.Set (Set)
 import Data.Set as Set
@@ -156,11 +156,16 @@ dockerCompose program = "services:\n" <> (joinWith "\n" $ mapWithIndex (\i (Tupl
     streamContainerList :: Array (Tuple Predicate (Set Interval))
     streamContainerList = Map.toUnfoldable $ getIntervallsForPredicates $ normalForm program
 
+dot :: Program -> String
+dot program = "digraph G {\n" <> joinWith "\n" (map scNode (toUnfoldable $ getIntervallsForPredicates program)) <> "\n}"
+  where
+  scNode :: Tuple Predicate (Set Interval) -> String
+  scNode (Tuple (Predicate predicate) intervals) = "  " <> predicate <> " [shape=record, label=\"{" <> predicate <> "|{" <> joinWith "|" (map (\(Interval start end) -> "[" <> show start <> "," <> show end <> "]") (Array.fromFoldable intervals)) <> "}}\"];"
+
 main :: Effect Unit
 main = do
   logShow jam
   logShow $ normalForm jam
-  logShow $ programPredicates $ normalForm jam
   log $ showIntervalForPredicates $ getIntervallsForPredicates $ normalForm jam
-  log $ dockerCompose $ normalForm jam
   writeTextFile UTF8 "docker-compose.yml" (dockerCompose $ normalForm jam)
+  writeTextFile UTF8 "plan.dot" (dot $ normalForm jam)

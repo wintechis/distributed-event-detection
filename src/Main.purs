@@ -2,10 +2,11 @@ module Main where
 
 import Prelude
 
-import Data.Array (concatMap, filter, mapWithIndex, (:))
+import Data.Array (concatMap, filter, mapMaybe, mapWithIndex, (:))
 import Data.Array as Array
 import Data.Map (Map, fromFoldable, toUnfoldable)
 import Data.Map as Map
+import Data.Maybe (Maybe(..))
 import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
@@ -137,8 +138,12 @@ getIntervallsForPredicates :: Program -> Map Predicate (Set Interval)
 getIntervallsForPredicates program = fromFoldable $ Set.map (\p -> Tuple p (getIntervallsForPredicate p)) (programPredicates program)
   where
     getIntervallsForPredicate :: Predicate -> Set Interval
-    getIntervallsForPredicate predicate = Set.fromFoldable $ concatMap (\(Rule head body) -> getIntervallsForPredicateFormula head <> concatMap getIntervallsForPredicateFormula body) program
+    getIntervallsForPredicate predicate = Set.fromFoldable $ concatMap (\(Rule _ body) -> concatMap getIntervallsForPredicateFormula body <> mapMaybe getZeroIntervalForRule body) program
       where
+        getZeroIntervalForRule :: Formula -> Maybe Interval
+        getZeroIntervalForRule (Formula predicate' _) = if predicate == predicate' then Just (Interval 0 0) else Nothing
+        getZeroIntervalForRule _ = Nothing
+
         getIntervallsForPredicateFormula :: Formula -> Array Interval
         getIntervallsForPredicateFormula (Formula _ _) = []
         getIntervallsForPredicateFormula (BoxPlus interval (Formula predicate' _)) = if predicate == predicate' then [ interval ] else []
@@ -160,7 +165,7 @@ dot :: Program -> String
 dot program = "digraph G {\n" <> joinWith "\n" (map scNode (toUnfoldable $ getIntervallsForPredicates program)) <> "\n}"
   where
   scNode :: Tuple Predicate (Set Interval) -> String
-  scNode (Tuple (Predicate predicate) intervals) = "  " <> predicate <> " [shape=record, label=\"{" <> predicate <> "|{" <> joinWith "|" (map (\(Interval start end) -> "[" <> show start <> "," <> show end <> "]") (Array.fromFoldable intervals)) <> "}}\"];"
+  scNode (Tuple (Predicate predicate) intervals) = "  " <> predicate <> " [shape=record, label=\"{" <> predicate <> (if Set.size intervals > 0 then ("|{" <> joinWith "|" (map (\(Interval start end) -> "[" <> show start <> "," <> show end <> "]") (Array.fromFoldable intervals)) <> "}") else "") <> "}\"];"
 
 main :: Effect Unit
 main = do

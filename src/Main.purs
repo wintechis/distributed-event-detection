@@ -1,14 +1,40 @@
-module Main where
+module Main
+  ( StreamContainer(..)
+  , addGraphToStreamContainer
+  , addWindowToStreamContainer
+  , emptyStreamContainer
+  , formatForMIME
+  , getGraphFromStreamContainer
+  , getGraphsInWindow
+  , getUnionGraph
+  , isGraphInWindow
+  , ldpsc
+  , logDebug
+  , logError
+  , logInfo
+  , logResponse
+  , logWarn
+  , main
+  , membershipQuads
+  , mimeForFormat
+  , nextGraphId
+  , quadsToWindow
+  , router
+  , streamContainerToQuads
+  , timeFormatter
+  , windowToQuads
+  )
+  where
 
 import Prelude
 
-import CLI (window)
+import CLI (Window(..), optsInfo)
 import Control.Monad.Error.Class (try)
 import Data.Array (catMaybes, concat, dropEnd, filter, head, length, mapWithIndex, range, snoc, (!!))
 import Data.Array as Array
-import Data.DateTime (DateTime(..), adjust)
+import Data.DateTime (DateTime, adjust)
 import Data.Either (Either(..), hush)
-import Data.Foldable (foldl)
+import Data.Foldable (foldl, foldr)
 import Data.Formatter.DateTime (Formatter, format)
 import Data.Formatter.DateTime as Formatter
 import Data.Formatter.Parser.Interval (parseDateTime)
@@ -31,8 +57,7 @@ import Effect.Ref (Ref, modify_, new, read)
 import HTTPure (Method(..), Request, Response, ResponseM, ServerM, badRequest, created, header, internalServerError, notFound, ok', serve, toString, (!@))
 import HTTPure.Headers (Headers(..))
 import N3 (Format(..), parse, write)
-import Node.Process (argv)
-import Options.Applicative (ParseError, briefDesc, execParser, helper, info, progDesc, (<**>))
+import Options.Applicative (execParser)
 import Parsing (parseErrorMessage, runParser)
 import RDF (Quad, Term, Graph, blankNode, defaultGraph, literalType, namedNode, namedNode', object, predicate, quad, value)
 import RDF.Prefixes (Prefix(..), ldp, rdf, xsd)
@@ -40,8 +65,6 @@ import RDF.Prefixes (Prefix(..), ldp, rdf, xsd)
 -- RDF Prefix for Stream Containers
 ldpsc :: Prefix
 ldpsc = Prefix "https://solid.ti.rw.fau.de/public/ns/stream-containers#"
-
-data Window = Window Term Term Term Milliseconds Milliseconds
 
 data StreamContainer = StreamContainer (Array Graph) (Array Window)
 
@@ -245,15 +268,7 @@ logError message = do
 main :: ServerM
 main = do
   streamContainerRef <- new $ emptyStreamContainer
-  options <-liftEffect $ execParser opts
-  liftEffect $ log options
-  args <- argv
-  let port = fromMaybe 8080 do
-        portString <- args !! 2
-        Integer.fromString portString
+  opts <-liftEffect $ execParser optsInfo
+  _ <- liftEffect $ modify_ (\sc -> foldr addWindowToStreamContainer sc opts.windows) streamContainerRef
   time <- liftEffect $ nowDateTime
-  serve port (router port streamContainerRef) $ log $ "[INFO]\t[" <> format timeFormatter time <> "] Server up on port " <> show port
-    where
-    opts = info (window <**> helper)
-      ( briefDesc
-     <> progDesc "Start a Stream Container web server" )
+  serve opts.port (router opts.port streamContainerRef) $ log $ "[INFO]\t[" <> format timeFormatter time <> "] Server up on port " <> show opts.port

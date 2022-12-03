@@ -2,7 +2,7 @@ module Main where
 
 import Prelude
 
-import Data.Array (concatMap, filter, mapMaybe, mapWithIndex, (:))
+import Data.Array (concatMap, filter, mapMaybe, mapWithIndex, nub, (:))
 import Data.Array as Array
 import Data.Map (Map, fromFoldable, toUnfoldable)
 import Data.Map as Map
@@ -12,7 +12,7 @@ import Data.Set as Set
 import Data.String (joinWith)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
-import Effect.Console (log, logShow)
+import Effect.Console (logShow)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (writeTextFile)
 
@@ -28,6 +28,8 @@ data Term = Variable String | Constant String
 instance showTerm :: Show Term where
   show (Variable name) = "?" <> name
   show (Constant name) = name
+derive instance eqTerm :: Eq Term
+derive instance ordTerm :: Ord Term
 
 data Predicate = Predicate String
 instance showPredicate :: Show Predicate where
@@ -42,24 +44,34 @@ instance showFormula :: Show Formula where
   show (BoxMinus interval formula) = "□-_" <> show interval <> " " <> show formula
   show (DiamondPlus interval formula) = "◇+_" <> show interval <> " " <> show formula
   show (DiamondMinus interval formula) = "◇-_" <> show interval <> " " <> show formula
+derive instance eqFormula :: Eq Formula
+derive instance ordFormula :: Ord Formula
 
 data Rule = Rule Formula (Array Formula)
 instance showRule :: Show Rule where
   show (Rule head body) = show head <> " ← " <> joinWith " ∧ " (show <$> body)
+derive instance eqRule :: Eq Rule
+derive instance ordRule :: Ord Rule
 
 type Program = Array Rule
 
+speedLessThanEqual30 :: Rule
+speedLessThanEqual30 = Rule (Formula (Predicate "speed_less_than_equal_30") [ Variable "car" ]) [ Formula (Predicate "speed") [ Variable "car", Variable "speed" ], Formula (Predicate "less_than_equal") [ Variable "speed", Constant "30" ] ]
+
+speed0 :: Rule
+speed0 = Rule (Formula (Predicate "speed_0") [ Variable "car" ]) [ Formula (Predicate "speed") [ Variable "car", Variable "speed" ], Formula (Predicate "less_than_equal") [ Variable "speed", Constant "0" ] ]
+
 lightjam :: Rule
-lightjam = Rule (Formula (Predicate "light_jam") [ Variable "car" ]) [ BoxMinus (Interval 0 15) (Formula (Predicate "less_than") [ Variable "speed", Constant "30" ]) ]
+lightjam = Rule (Formula (Predicate "light_jam") [ Variable "car" ]) [ BoxMinus (Interval 0 15) (Formula (Predicate "speed_less_than_equal_30") [ Variable "car" ]) ]
 
 mediumjam :: Rule
-mediumjam = Rule (Formula (Predicate "medium_jam") [ Variable "car" ]) [ Formula (Predicate "light_jam") [ Variable "car" ], DiamondMinus (Interval 0 30) (BoxMinus (Interval 0 3) (Formula (Predicate "speed") [ Variable "car", Constant "0" ])) ]
+mediumjam = Rule (Formula (Predicate "medium_jam") [ Variable "car" ]) [ Formula (Predicate "light_jam") [ Variable "car" ], DiamondMinus (Interval 0 30) (BoxMinus (Interval 0 3) (Formula (Predicate "speed_0") [ Variable "car" ])) ]
 
 heavyjam :: Rule
-heavyjam = Rule (Formula (Predicate "heavy_jam") [ Variable "car" ]) [ Formula (Predicate "light_jam") [ Variable "car" ], BoxMinus (Interval 0 30) (DiamondMinus (Interval 0 10) (BoxMinus (Interval 0 3) (Formula (Predicate "speed") [ Variable "car", Constant "0" ]))) ]
+heavyjam = Rule (Formula (Predicate "heavy_jam") [ Variable "car" ]) [ Formula (Predicate "light_jam") [ Variable "car" ], BoxMinus (Interval 0 30) (DiamondMinus (Interval 0 10) (BoxMinus (Interval 0 3) (Formula (Predicate "speed_0") [ Variable "car" ]))) ]
 
 jam :: Program
-jam = [ lightjam, mediumjam, heavyjam ]
+jam = [ speedLessThanEqual30, speed0, lightjam, mediumjam, heavyjam ]
 
 testFormula :: Formula
 testFormula = BoxPlus (Interval 3 10) (BoxPlus (Interval 4 15) (Formula (Predicate "p") [ Variable "a", Constant "c" ]))
@@ -119,7 +131,7 @@ normalRule (Rule head body) = [ Rule head (map (\(Tuple _ (Tuple predicate terms
     tuples = map normalFormula body
 
 normalForm :: Program -> Program
-normalForm = concatMap normalRule
+normalForm program = nub $ concatMap normalRule program
 
 formulaPredicate :: Formula -> Predicate
 formulaPredicate (Formula predicate _) = predicate
@@ -147,9 +159,9 @@ getIntervallsForPredicates program = fromFoldable $ Set.map (\p -> Tuple p (getI
         getIntervallsForPredicateFormula :: Formula -> Array Interval
         getIntervallsForPredicateFormula (Formula _ _) = []
         getIntervallsForPredicateFormula (BoxPlus interval (Formula predicate' _)) = if predicate == predicate' then [ interval ] else []
-        getIntervallsForPredicateFormula (BoxMinus interval (Formula predicate' _)) = if predicate == predicate' then [ interval ] else []
+        getIntervallsForPredicateFormula (BoxMinus (Interval start end) (Formula predicate' _)) = if predicate == predicate' then [ (Interval (negate start) (negate end)) ] else []
         getIntervallsForPredicateFormula (DiamondPlus interval (Formula predicate' _)) = if predicate == predicate' then [ interval ] else []
-        getIntervallsForPredicateFormula (DiamondMinus interval (Formula predicate' _)) = if predicate == predicate' then [ interval ] else []
+        getIntervallsForPredicateFormula (DiamondMinus (Interval start end) (Formula predicate' _)) = if predicate == predicate' then [ Interval (negate start) (negate end) ] else []
         getIntervallsForPredicateFormula _ = []
 
 showIntervalForPredicates :: Map Predicate (Set Interval) -> String
@@ -162,15 +174,34 @@ dockerCompose program = "services:\n" <> (joinWith "\n" $ mapWithIndex (\i (Tupl
     streamContainerList = Map.toUnfoldable $ getIntervallsForPredicates $ normalForm program
 
 dot :: Program -> String
-dot program = "digraph G {\n" <> joinWith "\n" (map scNode (toUnfoldable $ getIntervallsForPredicates program)) <> "\n}"
+dot program = "digraph G {\n" <> joinWith "\n" (map scNode (toUnfoldable $ getIntervallsForPredicates program)) <> "\n" <> joinWith "\n" (map agentNode program) <> "\n}"
   where
   scNode :: Tuple Predicate (Set Interval) -> String
-  scNode (Tuple (Predicate predicate) intervals) = "  " <> predicate <> " [shape=record, label=\"{" <> predicate <> (if Set.size intervals > 0 then ("|{" <> joinWith "|" (map (\(Interval start end) -> "[" <> show start <> "," <> show end <> "]") (Array.fromFoldable intervals)) <> "}") else "") <> "}\"];"
+  scNode (Tuple (Predicate predicate) intervals) = "  " <> predicate <> " [shape=record, label=\"{" <> predicate <> (if Set.size intervals > 0 then ("|{" <> joinWith "|" (map (\(Interval start end) -> "<w_" <> show start <> "_" <> show end <> ">" <> "[" <> show start <> "," <> show end <> "]") (Array.fromFoldable intervals)) <> "}") else "") <> "}\"];"
+  agentNode :: Rule -> String
+  agentNode (Rule (Formula (Predicate headPred) _) [ BoxPlus (Interval start end) (Formula (Predicate (bodyPred)) _) ]) = "  " <> agentName <> " [shape=circle, label=\"□\"];\n  " <> bodyPred <> ":<w_" <> show start <> "_" <> show end <> ">" <> " -> " <> agentName <> ";\n  " <> agentName <> " -> " <> headPred <> ";"
+    where
+      agentName = "agent_" <> bodyPred <> "_BoxPlus_" <> headPred
+  agentNode (Rule (Formula (Predicate headPred) _) [ BoxMinus (Interval start end) (Formula (Predicate (bodyPred)) _) ]) = "  " <> agentName <> " [shape=circle, label=\"□\"];\n  " <> bodyPred <> ":<w_" <> show (negate start) <> "_" <> show (negate end) <> ">" <> " -> " <> agentName <> ";\n  " <> agentName <> " -> " <> headPred <> ";"
+    where
+      agentName = "agent_" <> bodyPred <> "_BoxMinus_" <> headPred
+  agentNode (Rule (Formula (Predicate headPred) _) [ DiamondPlus (Interval start end) (Formula (Predicate (bodyPred)) _) ]) = "  " <> agentName <> " [shape=circle, label=\"◇\"];\n  " <> bodyPred <> ":<w_" <> show start <> "_" <> show end <> ">" <> " -> " <> agentName <> ";\n  " <> agentName <> " -> " <> headPred <> ";"
+    where
+      agentName = "agent_" <> bodyPred <> "_DiamondPlus_" <> headPred
+  agentNode (Rule (Formula (Predicate headPred) _) [ DiamondMinus (Interval start end) (Formula (Predicate (bodyPred)) _) ]) = "  " <> agentName <> " [shape=circle, label=\"◇\"];\n  " <> bodyPred <> ":<w_" <> show (negate start) <> "_" <> show (negate end) <> ">" <> " -> " <> agentName <> ";\n  " <> agentName <> " -> " <> headPred <> ";"
+    where
+      agentName = "agent_" <> bodyPred <> "_DiamondMinus_" <> headPred
+  agentNode (Rule (Formula (Predicate headPred) _) body) = "  " <> agentName <> " [shape=circle, label=\"∧\"];\n" <> joinWith "\n" (map (\f -> "  " <> getPredicateString f <> ":<w_0_0> -> " <> agentName <> ";") body) <> "  " <> agentName <> " -> " <> headPred <> ";"
+    where
+      getPredicateString :: Formula -> String
+      getPredicateString (Formula (Predicate predicate) _) = predicate
+      getPredicateString _ = "// Something went wrong here (Formula too deep)!"
+      agentName = "agent_" <> joinWith "_" (map getPredicateString body) <> "_BoxPlus_" <> headPred
+  agentNode (Rule _ _ ) = "// Something went wrong here (No Match)!"
 
 main :: Effect Unit
 main = do
   logShow jam
   logShow $ normalForm jam
-  log $ showIntervalForPredicates $ getIntervallsForPredicates $ normalForm jam
   writeTextFile UTF8 "docker-compose.yml" (dockerCompose $ normalForm jam)
   writeTextFile UTF8 "plan.dot" (dot $ normalForm jam)

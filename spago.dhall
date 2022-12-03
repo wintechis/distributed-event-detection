@@ -11,7 +11,32 @@ When creating a new Spago project, you can use
 to generate this file without the comments in this block.
 -}
 { name = "my-project"
-, dependencies = [ "console", "effect", "prelude" ]
+, dependencies =
+  [ "aff"
+  , "affjax"
+  , "affjax-node"
+  , "arrays"
+  , "console"
+  , "datetime"
+  , "debug"
+  , "effect"
+  , "either"
+  , "enums"
+  , "formatters"
+  , "http-methods"
+  , "integers"
+  , "js-timers"
+  , "lists"
+  , "maybe"
+  , "n3"
+  , "now"
+  , "ordered-collections"
+  , "parallel"
+  , "parsing"
+  , "prelude"
+  , "rdf"
+  , "strings"
+  ]
 , packages = ./packages.dhall
 , sources = [ "src/**/*.purs", "test/**/*.purs" ]
 }

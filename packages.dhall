@@ -103,3 +103,6 @@ let upstream =
         sha256:7a24ebdbacb2bfa27b2fc6ce3da96f048093d64e54369965a2a7b5d9892b6031
 
 in  upstream
+  with rdf = ../rdfps/spago.dhall as Location
+  with n3 = ../n3.purs/spago.dhall as Location
+  

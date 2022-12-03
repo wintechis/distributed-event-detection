@@ -2,7 +2,7 @@ module Main where
 
 import Prelude
 
-import Data.Array (concatMap, filter, mapMaybe, mapWithIndex, nub, (:))
+import Data.Array (concatMap, filter, length, mapMaybe, mapWithIndex, nub, (:))
 import Data.Array as Array
 import Data.Map (Map, fromFoldable, toUnfoldable)
 import Data.Map as Map
@@ -125,10 +125,20 @@ normalFormula (DiamondMinus (Interval start end) formula') = case normalFormula 
       newPred (Predicate predicate) = Predicate ("diamondMinus_" <> show start <> "_" <> show end <> "_" <> predicate <> joinWith "_" (map show (filterConsts ts)))
 
 normalRule :: Rule -> Program
-normalRule (Rule head body) = [ Rule head (map (\(Tuple _ (Tuple predicate terms)) -> Formula predicate terms) tuples) ] <> concatMap (\(Tuple program _) -> program) tuples
+normalRule rule@(Rule head body) = if isNormalRule body then [ rule ] else [ Rule head (map (\(Tuple _ (Tuple predicate terms)) -> Formula predicate terms) tuples) ] <> concatMap (\(Tuple program _) -> program) tuples
   where
     tuples :: Array (Tuple Program (Tuple Predicate (Array Term)))
     tuples = map normalFormula body
+
+isNormalRule :: Array Formula -> Boolean
+isNormalRule body = if length body == 1 then (length (filter (\d -> d > 1) (map formulaDepth body))) == 0 else (length (filter (\d -> d > 0) (map formulaDepth body))) == 0
+
+formulaDepth :: Formula -> Int
+formulaDepth (Formula _ _) = 0
+formulaDepth (BoxPlus _ formula) = formulaDepth formula + 1
+formulaDepth (BoxMinus _ formula) = formulaDepth formula + 1
+formulaDepth (DiamondPlus _ formula) = formulaDepth formula + 1
+formulaDepth (DiamondMinus _ formula) = formulaDepth formula + 1
 
 normalForm :: Program -> Program
 normalForm program = nub $ concatMap normalRule program

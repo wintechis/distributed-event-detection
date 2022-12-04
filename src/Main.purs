@@ -6,29 +6,27 @@ import Affjax.Node (URL, defaultRequest, post, printError, request)
 import Affjax.RequestBody (RequestBody(..))
 import Affjax.RequestHeader (RequestHeader(..))
 import Affjax.ResponseFormat (string)
+import CLI (optsInfo)
 import Control.Parallel (parSequence, parSequence_)
 import Data.Array (catMaybes, concat, filter, find, foldl, last, length, nub)
-import Data.DateTime (DateTime, adjust, millisecond, time)
+import Data.DateTime (DateTime)
 import Data.Either (Either(..), hush)
-import Data.Enum (fromEnum)
 import Data.Formatter.DateTime (Formatter, FormatterCommand(..), format)
 import Data.Formatter.Parser.Interval (parseDateTime)
 import Data.HTTP.Method (Method(..))
-import Data.Int (toNumber)
 import Data.List (fromFoldable)
-import Data.Map (Map, empty, insert, lookup, singleton, size, union)
+import Data.Map (Map, empty, insert, lookup, singleton, union)
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.String (Pattern(..), contains, joinWith, split, toUpper)
-import Data.Time.Duration (Milliseconds(..)) as Duration
-import Data.Time.Duration (negateDuration)
 import Debug (trace)
 import Effect (Effect)
 import Effect.Aff (Aff, launchAff_)
 import Effect.Class (liftEffect)
-import Effect.Console (log)
+import Effect.Console (log, logShow)
 import Effect.Now (nowDateTime)
 import Effect.Timer (setInterval)
 import N3 (Format(..), parse, write)
+import Options.Applicative (execParser)
 import Parsing (runParser)
 import RDF (Quad, Term, defaultGraph, literalType, namedNode, namedNode', object, predicate, quad, subject, termType, value)
 import RDF.Prefixes (Prefix(..), rdf, xsd)
@@ -156,6 +154,8 @@ memberRelation = namedNode "http://localhost:8082/#inWindow"
 
 main :: Effect Unit
 main = do
+  opts <-liftEffect $ execParser optsInfo
+  liftEffect $ logShow opts
   liftEffect $ log $ "Rule: " <> show rule
   _ <- setInterval 1000 loop
   pure unit

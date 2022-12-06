@@ -2,10 +2,10 @@ module CLI where
 
 import Prelude
 
-import Data.Array as Array
+import Affjax (URL)
 import Data.Either (Either(..))
-import Data.List (List(..), fromFoldable, (:))
-import Data.String (Pattern(..), joinWith, split, toLower)
+import Data.List (List)
+import Data.String (Pattern(..), split, toLower)
 import Options.Applicative (Parser, ParserInfo, ReadM, argument, briefDesc, eitherReader, help, helper, info, long, many, metavar, option, progDesc, short, (<**>))
 
 data RuleType = And | Box | Diamond
@@ -14,9 +14,12 @@ instance showRuleType :: Show RuleType where
   show Box = "BOX"
   show Diamond = "DIAMOND"
 
-data Stream = Stream String (Array String)
+data Stream = Stream URL URL Variables
 instance showStream :: Show Stream where
-  show (Stream uri variables) = uri <> "[" <> joinWith "," (map (\var -> "?" <> var) variables) <> "]"
+  show (Stream uri predicate (Unary var)) = uri <> "[" <> predicate <> "(?" <> var <> ")" <> "]"
+  show (Stream uri predicate (Binary var1 var2)) = uri <> "[" <> predicate <> "(?" <> var1 <> ", " <> var2 <> ")" <> "]"
+
+data Variables = Unary String | Binary String String
 
 type Options = {
     ruleType :: RuleType,
@@ -59,6 +62,7 @@ streamReader :: ReadM Stream
 streamReader = eitherReader read 
   where
     read :: String -> Either String Stream
-    read str = case fromFoldable (split (Pattern " ") str) of 
-      Nil -> Left "No uri given for stream!"
-      uri : variables -> Right $ Stream uri $ Array.fromFoldable variables
+    read str = case split (Pattern " ") str of 
+      [ uri, pred, var ] -> Right $ Stream uri pred $ Unary var
+      [ uri, pred, var1, var2 ] -> Right $ Stream uri pred $ Binary var1 var2
+      argSplit -> Left $ "Incorrect arguments for stream given: " <> show argSplit

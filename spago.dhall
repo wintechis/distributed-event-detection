@@ -22,6 +22,7 @@ to generate this file without the comments in this block.
   , "effect"
   , "either"
   , "enums"
+  , "foldable-traversable"
   , "formatters"
   , "http-methods"
   , "integers"
@@ -30,12 +31,14 @@ to generate this file without the comments in this block.
   , "maybe"
   , "n3"
   , "now"
+  , "optparse"
   , "ordered-collections"
   , "parallel"
   , "parsing"
   , "prelude"
   , "rdf"
   , "strings"
+  , "tuples"
   ]
 , packages = ./packages.dhall
 , sources = [ "src/**/*.purs", "test/**/*.purs" ]

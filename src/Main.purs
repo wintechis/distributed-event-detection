@@ -105,7 +105,7 @@ streamContainerToQuads now (StreamContainer graphArray windowArray) = [
 ] <>
   map (\i -> quad (namedNode "") (namedNode' ldp "contains") (namedNode $ "/" <> show i) defaultGraph) (dropEnd 1 (range 0 (length graphArray))) <>
   (concat $ mapWithIndex windowToQuads windowArray) <>
-  (concat $ (membershipQuads now graphArray) <$> windowArray)
+  (concat $ membershipQuads now graphArray <$> windowArray)
 
 windowToQuads :: Int -> Window -> Array Quad
 windowToQuads i (Window memberRelation membershipResource contentTimestampRelation startDuration endDuration) = [
@@ -165,7 +165,7 @@ router port streamContainerRef request@{ method: Get, path: [], headers: (Header
     createSCPayload streamContainer time = do
       -- serialize Triples for SC
       let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-      payload <- try $ write ("http://localhost:" <> show port <> "/") format $ streamContainerToQuads time streamContainer
+      payload <- try $ write ("http://127.0.0.1:" <> show port <> "/") format $ streamContainerToQuads time streamContainer
       case payload of 
         Left error -> do
           logError $ "Serializing triples for Stream Container failed: " <> message error
@@ -176,7 +176,7 @@ router port streamContainerRef request@{ method: Post, path: [], body, headers: 
   streamContainer <- liftEffect $ read streamContainerRef
   bodyString <- toString body
   let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-  payload <- try $ parse ("http://localhost:" <> show port <> "/" <> show (nextGraphId streamContainer)) format bodyString
+  payload <- try $ parse ("http://127.0.0.1:" <> show port <> "/" <> show (nextGraphId streamContainer)) format bodyString
   case payload of 
     Left error -> do
       logError $ "Parsing request body failed: " <> message error
@@ -189,7 +189,7 @@ router port streamContainerRef request@{ method: Get, path : [ "all" ], headers:
   streamContainer <- liftEffect $ read streamContainerRef
   let graph = getUnionGraph streamContainer
   let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-  payload <- write ("http://localhost:" <> show port <> "/") format $ Array.fromFoldable graph
+  payload <- write ("http://127.0.0.1:" <> show port <> "/") format $ Array.fromFoldable graph
   logResponse request $ ok' (header "Content-Type" $ mimeForFormat format) payload
 -- GET /{id}
 router port streamContainerRef request@{ method: Get, path, headers: (Headers headers) } | length path == 1 = (liftEffect $ read streamContainerRef) >>= \streamContainer -> case Integer.fromString (path !@ 0) of 
@@ -198,7 +198,7 @@ router port streamContainerRef request@{ method: Get, path, headers: (Headers he
     Nothing -> logResponse request notFound
     Just graph -> do
       let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-      payload <- try $ write ("http://localhost:" <> show port <> "/" <> show i) format $ Array.fromFoldable graph
+      payload <- try $ write ("http://127.0.0.1:" <> show port <> "/" <> show i) format $ Array.fromFoldable graph
       case payload of 
         Left error -> do
           logError $ "Serializing triples for contained resource failed: " <> message error
@@ -208,7 +208,7 @@ router port streamContainerRef request@{ method: Get, path, headers: (Headers he
 router port streamContainerRef request@{ method: Post, path: [ "window" ], body, headers: (Headers headers) } = do
   bodyString <- toString body
   let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-  payload <- try $ parse ("http://localhost:" <> show port <> "/") format bodyString
+  payload <- try $ parse ("http://127.0.0.1:" <> show port <> "/") format bodyString
   case payload of
     Left error -> do
       logError $ "Parsing request body failed: " <> message error

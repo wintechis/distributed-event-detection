@@ -6,38 +6,39 @@ import Affjax.Node (URL, defaultRequest, post, printError, request)
 import Affjax.RequestBody (RequestBody(..))
 import Affjax.RequestHeader (RequestHeader(..))
 import Affjax.ResponseFormat (string)
-import CLI (Options, Stream(..), Terms(..), optsInfo)
+import CLI (Builtin(..), Options, Stream(..), Terms(..), optsInfo)
 import Control.Alternative (guard)
 import Control.Parallel (parSequence)
-import Data.Array (catMaybes, concatMap, filter, find, last, mapWithIndex, (!!))
+import Data.Array (catMaybes, concatMap, filter, findIndex, foldl, index, last, mapMaybe, mapWithIndex, (!!))
 import Data.Array as Array
+import Data.Array.NonEmpty (foldl1)
+import Data.Array.NonEmpty as NonEmpty
 import Data.DateTime (DateTime, adjust, millisecond, time)
-import Data.Either (Either(..), hush)
+import Data.Either (Either(..))
 import Data.Enum (fromEnum)
 import Data.Foldable (and)
 import Data.Formatter.DateTime (Formatter, FormatterCommand(..), format)
-import Data.Formatter.Parser.Interval (parseDateTime)
 import Data.HTTP.Method (Method(..))
 import Data.Int (toNumber)
 import Data.List (fromFoldable)
-import Data.Map (Map)
-import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Number (fromString)
 import Data.Set (Set, member)
 import Data.Set as Set
-import Data.String (Pattern(..), contains, joinWith, split, toUpper)
+import Data.String (Pattern(..), contains, joinWith, split)
 import Data.Time.Duration (negateDuration)
 import Data.Time.Duration as Duration
 import Data.Tuple (Tuple(..), snd)
+import Debug (spy)
 import Effect (Effect)
 import Effect.Aff (Aff, launchAff_)
 import Effect.Class (liftEffect)
 import Effect.Console (log, logShow)
 import Effect.Now (nowDateTime)
+import Effect.Timer (setInterval)
 import N3 (Format(..), parse, write)
 import Options.Applicative (execParser)
-import Parsing (runParser)
-import RDF (Quad, Term, defaultGraph, literalType, namedNode, namedNode', object, predicate, quad, subject, termType, value, variable)
+import RDF (Quad, Term, literalType, namedNode, namedNode', object, predicate, subject, termType, value, variable)
 import RDF.Prefixes (Prefix(..), rdf, xsd)
 
 --data Triple = Triple TermOrVariable TermOrVariable TermOrVariable
@@ -73,23 +74,23 @@ import RDF.Prefixes (Prefix(..), rdf, xsd)
 --    (NoVariable $ literalType "true" $ namedNode' xsd "boolean")
 --  )
 
-data TermOrVariable = NoVariable Term | Variable String
-derive instance eqTermOrVariable :: Eq TermOrVariable
-derive instance ordTermOrVariable :: Ord TermOrVariable
-instance showTermOrVariable :: Show TermOrVariable where
-  show (NoVariable term) = fromMaybe (show term) $ getSuffix term
-  show (Variable variable) = toUpper variable
-
-data Fact = Fact Term Term Term DateTime
-derive instance eqFact :: Eq Fact
-derive instance ordFact :: Ord Fact
-instance showFact :: Show Fact where
-  show (Fact predicate subject object time) = p <> "(" <> s <> "," <> o <> ")@" <> t <> "."
-    where
-      p = (fromMaybe (show predicate) $ getSuffix predicate)
-      s = (fromMaybe (show subject) $ getSuffix subject)
-      o = (fromMaybe (show object) $ getSuffix object)
-      t = format iso8601Formatter time
+--data TermOrVariable = NoVariable Term | Variable String
+--derive instance eqTermOrVariable :: Eq TermOrVariable
+--derive instance ordTermOrVariable :: Ord TermOrVariable
+--instance showTermOrVariable :: Show TermOrVariable where
+--  show (NoVariable term) = fromMaybe (show term) $ getSuffix term
+--  show (Variable variable) = toUpper variable
+--
+--data Fact = Fact Term Term Term DateTime
+--derive instance eqFact :: Eq Fact
+--derive instance ordFact :: Ord Fact
+--instance showFact :: Show Fact where
+--  show (Fact predicate subject object time) = p <> "(" <> s <> "," <> o <> ")@" <> t <> "."
+--    where
+--      p = (fromMaybe (show predicate) $ getSuffix predicate)
+--      s = (fromMaybe (show subject) $ getSuffix subject)
+--      o = (fromMaybe (show object) $ getSuffix object)
+--      t = format iso8601Formatter time
 
 --type Binding = Map TermOrVariable Term
 --
@@ -165,24 +166,41 @@ main :: Effect Unit
 main = do
   opts <-execParser optsInfo
   logShow opts
-  logShow r1
-  logShow r2
-  logShow $ naturalJoin r1 r2
-  --logShow $ (\i1 i2 -> i1) <$> [1,2,3,4] <*> [5,6,7]
-  --log $ "Rule: " <> show rule
-  --_ <- setInterval 1000 $ loop opts
+  _ <- setInterval 1000 $ loop opts
   pure unit
 
 loop :: Options -> Effect Unit
 loop opts = launchAff_ do
   dateTime <- liftEffect $ nowDateTime
-  let roundedDateTime = fromMaybe dateTime $ adjust (negateDuration $ (\ms -> Duration.Milliseconds ms) $ toNumber $ fromEnum $ millisecond $ time dateTime) dateTime
+  let roundedDateTime = fromMaybe dateTime $ adjust (negateDuration $ (\ms -> Duration.Milliseconds ms) $ toNumber $ (\i -> i + 1) $ fromEnum $ millisecond $ time dateTime) dateTime
   liftEffect $ log $ "Time: " <> format iso8601Formatter roundedDateTime
-  andBindings <- AndBindings <$> (parSequence $ map (getBindingsForSource roundedDateTime) (Array.fromFoldable opts.sources)) :: Aff AndBindings
-  --let combinedBinding = fold combineBindings $ Array.fromFoldable bindings
-  --liftEffect $ logShow bindings
-  --liftEffect $ logShow combinedBinding
+  relations <- parSequence $ map (getRelationForSource roundedDateTime) (Array.fromFoldable opts.sources) :: Aff (Array Relation)
+  let joined = fromMaybe (newRelation (RelationHeader [])) $ (foldl1 naturalJoin) <$> (NonEmpty.fromArray relations)
+  let builtinJoined = foldl filterBuiltin joined $ Array.fromFoldable opts.builtins
+  liftEffect $ logShow builtinJoined
   pure unit
+
+filterBuiltin :: Relation -> Builtin -> Relation
+filterBuiltin (Relation (RelationHeader header) rows) (LessThanEqual term1 term2) = Relation (RelationHeader header) $ mapMaybe filterRow rows
+  where
+    value1 :: RelationRow -> Maybe Number
+    value1 (RelationRow row) = case termType term1 of
+      "Literal" -> fromString $ value term1
+      "Variable" -> do
+        i <- findIndex (\h -> h == term1) header :: Maybe Int
+        t <- index row i
+        fromString $ value t
+      _ -> Nothing
+    value2 :: RelationRow -> Maybe Number
+    value2 (RelationRow row) = case termType term2 of
+      "Literal" -> fromString $ value term2
+      "Variable" -> do
+        i <- findIndex (\h -> h == term2) header :: Maybe Int
+        t <- index row i
+        fromString $ value t
+      _ -> Nothing
+    filterRow :: RelationRow -> Maybe RelationRow
+    filterRow row = if value1 row <= value2 row then Just row else Nothing
 
 newtype RelationRow = RelationRow (Array Term)
 instance showRelationRow :: Show RelationRow where
@@ -224,61 +242,38 @@ naturalJoin (Relation (RelationHeader header1) rows1) (Relation (RelationHeader 
     combinedHeaders :: RelationHeader
     combinedHeaders = RelationHeader $ header1 <> catMaybes (mapWithIndex (\i v -> if member i header2ForRemoval then Nothing else Just v) header2 )
 
-type Binding = Map Term Term
-newtype Bindings = Bindings (Array Binding)
-newtype AndBindings = AndBindings (Array Bindings)
-newtype CombinedBindings = CombinedBindings (Array Bindings)
 
---combineAndBindings :: AndBindings -> List Builtin -> CombinedBindings
---combineAndBindings (AndBindings bindings) builtins = CombinedBindings $ foldMaybe
---  where
---    combineBindings :: Bindings -> Bindings -> Array (Maybe Binding)
---    combineBindings (Bindings bs1) (Bindings bs2) = do
---      b1 <- bs1
---      b2 <- bs2
---      pure $ combineBinding b1 b2
---        where
---          combineBinding :: Binding -> Binding -> Maybe Binding
---          combineBinding b1 b2 = if and $ values $ intersectionWith (\v1 v2 -> if v1 == v2 then true else false) b1 b2 then Just $ union b1 b2 else Nothing
---
-
-getBindingsForSource :: DateTime -> Stream -> Aff Bindings
-getBindingsForSource dateTime (Stream uri pred variables) = do
+getRelationForSource :: DateTime -> Stream -> Aff Relation
+getRelationForSource dateTime (Stream uri pred variables) = do
   containerQuads <- getQuads dateTime uri
   let obsInWindow = map (\q -> value $ object q) $ filter (\q -> subject q == namedNode uri && predicate q == namedNode "http://ex.org/vocab/inWindow") containerQuads
-  obsQuadArrays <- parSequence $ getQuads dateTime <$> obsInWindow
+  obsQuadArrays <- parSequence $ getQuads dateTime <$> obsInWindow :: Aff (Array (Array Quad))
   case variables of 
     Unary var -> do
       let obsQuads = concatMap (\qs -> filter (\q -> object q == pred && predicate q == namedNode' rdf "type" ) qs) obsQuadArrays
-      pure $ Bindings $ map (\q -> Map.singleton var (subject q)) obsQuads
+      let relation = newRelation (RelationHeader [ var ])
+      pure $ foldl (\r q -> addRow (RelationRow [ subject q ]) r) relation obsQuads
     Binary var1 var2 -> do
       let obsQuads = concatMap (\qs -> filter (\q -> predicate q == pred) qs) obsQuadArrays
-      pure $ Bindings $ Map.fromFoldable <$> map (\q -> [ Tuple var1 $ subject q, Tuple var2 $ object q ]) obsQuads
+      let relation = newRelation (RelationHeader [ var1, var2 ])
+      pure $ foldl (\r q -> addRow (RelationRow [ subject q, object q ]) r) relation obsQuads
 
---combineBindings :: Array Binding -> Array Binding -> Array (Maybe Binding)
---combineBindings bs1 bs2 = do
---  b1 <- bs1
---  b2 <- bs2
-
---bind :: Binding -> Stream -> Aff Unit
---bind binding (Stream uri variables) = do
-
-datalogFromQuads :: Array Quad -> Maybe Fact
-datalogFromQuads quads = do
-  p <- object <$> find (\q -> predicate q == namedNode' sosa "observedProperty") quads
-  s <- object <$> find (\q -> predicate q == namedNode' sosa "hasFeatureOfInterest") quads
-  o <- object <$> find (\q -> predicate q == namedNode' sosa "hasSimpleResult") quads
-  t <- join $ (\dateTimeString -> hush $ runParser dateTimeString parseDateTime) <$> value <$> object <$> find (\q -> predicate q == namedNode' sosa "resultTime") quads
-  pure $ Fact p s o t
-
-quadsFromDatalog :: Fact -> Array Quad
-quadsFromDatalog (Fact p s o t) = [
-  quad (namedNode "") (namedNode' rdf "type") (namedNode' sosa "Observation") defaultGraph,
-  quad (namedNode "") (namedNode' sosa "resultTime") (literalType (format iso8601Formatter t) (namedNode' xsd "dateTimeStamp")) defaultGraph,
-  quad (namedNode "") (namedNode' sosa "hasSimpleResult") o defaultGraph,
-  quad (namedNode "") (namedNode' sosa "hasFeatureOfInterest") s defaultGraph,
-  quad (namedNode "") (namedNode' sosa "observedProperty") p defaultGraph
-]
+--datalogFromQuads :: Array Quad -> Maybe Fact
+--datalogFromQuads quads = do
+--  p <- object <$> find (\q -> predicate q == namedNode' sosa "observedProperty") quads
+--  s <- object <$> find (\q -> predicate q == namedNode' sosa "hasFeatureOfInterest") quads
+--  o <- object <$> find (\q -> predicate q == namedNode' sosa "hasSimpleResult") quads
+--  t <- join $ (\dateTimeString -> hush $ runParser dateTimeString parseDateTime) <$> value <$> object <$> find (\q -> predicate q == namedNode' sosa "resultTime") quads
+--  pure $ Fact p s o t
+--
+--quadsFromDatalog :: Fact -> Array Quad
+--quadsFromDatalog (Fact p s o t) = [
+--  quad (namedNode "") (namedNode' rdf "type") (namedNode' sosa "Observation") defaultGraph,
+--  quad (namedNode "") (namedNode' sosa "resultTime") (literalType (format iso8601Formatter t) (namedNode' xsd "dateTimeStamp")) defaultGraph,
+--  quad (namedNode "") (namedNode' sosa "hasSimpleResult") o defaultGraph,
+--  quad (namedNode "") (namedNode' sosa "hasFeatureOfInterest") s defaultGraph,
+--  quad (namedNode "") (namedNode' sosa "observedProperty") p defaultGraph
+--]
 
 getQuads :: DateTime -> URL -> Aff (Array Quad)
 getQuads acceptDateTime url = do

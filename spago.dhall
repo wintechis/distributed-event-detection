@@ -36,7 +36,6 @@ to generate this file without the comments in this block.
   , "optparse"
   , "ordered-collections"
   , "parallel"
-  , "parsing"
   , "prelude"
   , "rdf"
   , "strings"

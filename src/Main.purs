@@ -2,42 +2,42 @@ module Main where
 
 import Prelude
 
-import Affjax.Node (URL, defaultRequest, get, post, printError, request)
+import Affjax.Node (URL, defaultRequest, post, printError, request)
 import Affjax.RequestBody (RequestBody(..))
 import Affjax.RequestHeader (RequestHeader(..))
 import Affjax.ResponseFormat (string)
-import CLI (Options, Stream(..), Variables(..), optsInfo)
-import Control.Parallel (parSequence, parSequence_)
-import Data.Array (catMaybes, concat, concatMap, filter, find, fold, foldl, last, length, nub)
+import CLI (Options, Stream(..), Terms(..), optsInfo)
+import Control.Alternative (guard)
+import Control.Parallel (parSequence)
+import Data.Array (catMaybes, concatMap, filter, find, last, mapWithIndex, (!!))
 import Data.Array as Array
 import Data.DateTime (DateTime, adjust, millisecond, time)
 import Data.Either (Either(..), hush)
 import Data.Enum (fromEnum)
-import Data.Foldable (and, foldM)
+import Data.Foldable (and)
 import Data.Formatter.DateTime (Formatter, FormatterCommand(..), format)
 import Data.Formatter.Parser.Interval (parseDateTime)
 import Data.HTTP.Method (Method(..))
 import Data.Int (toNumber)
 import Data.List (fromFoldable)
-import Data.Map (Map, empty, insert, intersectionWith, lookup, singleton, union, values)
+import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
-import Data.Semigroup.Foldable (foldl1)
+import Data.Set (Set, member)
+import Data.Set as Set
 import Data.String (Pattern(..), contains, joinWith, split, toUpper)
 import Data.Time.Duration (negateDuration)
 import Data.Time.Duration as Duration
-import Data.Tuple (Tuple(..))
-import Debug (trace)
+import Data.Tuple (Tuple(..), snd)
 import Effect (Effect)
 import Effect.Aff (Aff, launchAff_)
 import Effect.Class (liftEffect)
 import Effect.Console (log, logShow)
 import Effect.Now (nowDateTime)
-import Effect.Timer (setInterval)
 import N3 (Format(..), parse, write)
 import Options.Applicative (execParser)
 import Parsing (runParser)
-import RDF (Quad, Term, defaultGraph, literalType, namedNode, namedNode', object, predicate, quad, subject, termType, value)
+import RDF (Quad, Term, defaultGraph, literalType, namedNode, namedNode', object, predicate, quad, subject, termType, value, variable)
 import RDF.Prefixes (Prefix(..), rdf, xsd)
 
 --data Triple = Triple TermOrVariable TermOrVariable TermOrVariable
@@ -163,10 +163,14 @@ memberRelation = namedNode "http://localhost:8082/#inWindow"
 
 main :: Effect Unit
 main = do
-  opts <-liftEffect $ execParser optsInfo
-  liftEffect $ logShow opts
---  liftEffect $ log $ "Rule: " <> show rule
-  _ <- setInterval 1000 $ loop opts
+  opts <-execParser optsInfo
+  logShow opts
+  logShow r1
+  logShow r2
+  logShow $ naturalJoin r1 r2
+  --logShow $ (\i1 i2 -> i1) <$> [1,2,3,4] <*> [5,6,7]
+  --log $ "Rule: " <> show rule
+  --_ <- setInterval 1000 $ loop opts
   pure unit
 
 loop :: Options -> Effect Unit
@@ -174,25 +178,82 @@ loop opts = launchAff_ do
   dateTime <- liftEffect $ nowDateTime
   let roundedDateTime = fromMaybe dateTime $ adjust (negateDuration $ (\ms -> Duration.Milliseconds ms) $ toNumber $ fromEnum $ millisecond $ time dateTime) dateTime
   liftEffect $ log $ "Time: " <> format iso8601Formatter roundedDateTime
-  bindings <- parSequence $ map (getBindingsForSource roundedDateTime) opts.sources
+  andBindings <- AndBindings <$> (parSequence $ map (getBindingsForSource roundedDateTime) (Array.fromFoldable opts.sources)) :: Aff AndBindings
   --let combinedBinding = fold combineBindings $ Array.fromFoldable bindings
-  liftEffect $ logShow bindings
+  --liftEffect $ logShow bindings
   --liftEffect $ logShow combinedBinding
+  pure unit
 
-type Binding = Map String Term
+newtype RelationRow = RelationRow (Array Term)
+instance showRelationRow :: Show RelationRow where
+  show (RelationRow row) = "(" <> (joinWith ", " $ map show row) <> ")\n"
+newtype RelationHeader = RelationHeader (Array Term)
+instance showRelationHeader :: Show RelationHeader where
+  show (RelationHeader header) = (joinWith ", " $ map show header) <> "\n"
+data Relation = Relation RelationHeader (Array RelationRow)
+instance showRelation :: Show Relation where
+  show (Relation header rows) = show header <> (joinWith "" $ map show rows)
 
-getBindingsForSource :: DateTime -> Stream -> Aff (Array Binding)
+newRelation :: RelationHeader -> Relation
+newRelation header = Relation header []
+
+addRow :: RelationRow -> Relation -> Relation
+addRow newRow (Relation header rows) = Relation header $ rows <> [ newRow ]
+
+r1 :: Relation
+r1 = addRow (RelationRow [ namedNode "http://ex.org/cars/3", literalType "10" (namedNode' xsd "integer") ]) $ addRow (RelationRow [ namedNode "http://ex.org/cars/1", literalType "3" (namedNode' xsd "integer") ]) $ newRelation $ RelationHeader [ variable "car", variable "speed" ]
+
+r2 :: Relation
+r2 = addRow (RelationRow [ namedNode "http://ex.org/colors/green", namedNode "http://ex.org/cars/2" ]) $ addRow (RelationRow [ namedNode "http://ex.org/colors/red", namedNode "http://ex.org/cars/3" ]) $ newRelation $ RelationHeader [ variable "color", variable "car" ]
+
+naturalJoin :: Relation -> Relation -> Relation
+naturalJoin (Relation (RelationHeader header1) rows1) (Relation (RelationHeader header2) rows2) = Relation combinedHeaders $ catMaybes $ joinRow <$> rows1 <*> rows2
+  where
+    joinRow :: RelationRow -> RelationRow -> Maybe RelationRow
+    joinRow (RelationRow row1) (RelationRow row2) = if and $ map (\(Tuple i1 i2) -> row1 !! i1 == row2 !! i2) headerMatches
+      then Just $ RelationRow $ row1 <> catMaybes (mapWithIndex (\i v -> if member i header2ForRemoval then Nothing else Just v) row2 )
+      else Nothing
+    headerMatches :: Array (Tuple Int Int)
+    headerMatches = do
+      Tuple i1 h1 <- mapWithIndex (\i h -> Tuple i h) header1
+      Tuple i2 h2 <- mapWithIndex (\i h -> Tuple i h) header2
+      guard $ h1 == h2
+      pure $ Tuple i1 i2
+    header2ForRemoval :: Set Int
+    header2ForRemoval = Set.fromFoldable $ map snd headerMatches
+    combinedHeaders :: RelationHeader
+    combinedHeaders = RelationHeader $ header1 <> catMaybes (mapWithIndex (\i v -> if member i header2ForRemoval then Nothing else Just v) header2 )
+
+type Binding = Map Term Term
+newtype Bindings = Bindings (Array Binding)
+newtype AndBindings = AndBindings (Array Bindings)
+newtype CombinedBindings = CombinedBindings (Array Bindings)
+
+--combineAndBindings :: AndBindings -> List Builtin -> CombinedBindings
+--combineAndBindings (AndBindings bindings) builtins = CombinedBindings $ foldMaybe
+--  where
+--    combineBindings :: Bindings -> Bindings -> Array (Maybe Binding)
+--    combineBindings (Bindings bs1) (Bindings bs2) = do
+--      b1 <- bs1
+--      b2 <- bs2
+--      pure $ combineBinding b1 b2
+--        where
+--          combineBinding :: Binding -> Binding -> Maybe Binding
+--          combineBinding b1 b2 = if and $ values $ intersectionWith (\v1 v2 -> if v1 == v2 then true else false) b1 b2 then Just $ union b1 b2 else Nothing
+--
+
+getBindingsForSource :: DateTime -> Stream -> Aff Bindings
 getBindingsForSource dateTime (Stream uri pred variables) = do
   containerQuads <- getQuads dateTime uri
   let obsInWindow = map (\q -> value $ object q) $ filter (\q -> subject q == namedNode uri && predicate q == namedNode "http://ex.org/vocab/inWindow") containerQuads
   obsQuadArrays <- parSequence $ getQuads dateTime <$> obsInWindow
   case variables of 
     Unary var -> do
-      let obsQuads = concatMap (\qs -> filter (\q -> object q == namedNode pred && predicate q == namedNode' rdf "type" ) qs) obsQuadArrays
-      pure $ map (\q -> Map.singleton var (subject q)) obsQuads
+      let obsQuads = concatMap (\qs -> filter (\q -> object q == pred && predicate q == namedNode' rdf "type" ) qs) obsQuadArrays
+      pure $ Bindings $ map (\q -> Map.singleton var (subject q)) obsQuads
     Binary var1 var2 -> do
-      let obsQuads = concatMap (\qs -> filter (\q -> predicate q == namedNode pred) qs) obsQuadArrays
-      pure $ Map.fromFoldable <$> map (\q -> [ Tuple var1 $ subject q, Tuple var2 $ object q ]) obsQuads
+      let obsQuads = concatMap (\qs -> filter (\q -> predicate q == pred) qs) obsQuadArrays
+      pure $ Bindings $ Map.fromFoldable <$> map (\q -> [ Tuple var1 $ subject q, Tuple var2 $ object q ]) obsQuads
 
 --combineBindings :: Array Binding -> Array Binding -> Array (Maybe Binding)
 --combineBindings bs1 bs2 = do

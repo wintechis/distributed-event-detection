@@ -9,7 +9,7 @@ import Affjax.ResponseFormat (string)
 import CLI (Builtin(..), Options, Stream(..), Terms(..), optsInfo)
 import Control.Alternative (guard)
 import Control.Parallel (parSequence)
-import Data.Array (catMaybes, concatMap, filter, findIndex, foldl, index, last, mapMaybe, mapWithIndex, (!!))
+import Data.Array (catMaybes, concatMap, filter, findIndex, foldl, index, last, length, mapMaybe, mapWithIndex, (!!))
 import Data.Array as Array
 import Data.Array.NonEmpty (foldl1)
 import Data.Array.NonEmpty as NonEmpty
@@ -29,7 +29,6 @@ import Data.String (Pattern(..), contains, joinWith, split)
 import Data.Time.Duration (negateDuration)
 import Data.Time.Duration as Duration
 import Data.Tuple (Tuple(..), snd)
-import Debug (spy)
 import Effect (Effect)
 import Effect.Aff (Aff, launchAff_)
 import Effect.Class (liftEffect)
@@ -38,7 +37,7 @@ import Effect.Now (nowDateTime)
 import Effect.Timer (setInterval)
 import N3 (Format(..), parse, write)
 import Options.Applicative (execParser)
-import RDF (Quad, Term, literalType, namedNode, namedNode', object, predicate, subject, termType, value, variable)
+import RDF (Quad, Term, defaultGraph, literalType, namedNode, namedNode', object, predicate, quad, subject, termType, value, variable)
 import RDF.Prefixes (Prefix(..), rdf, xsd)
 
 --data Triple = Triple TermOrVariable TermOrVariable TermOrVariable
@@ -172,11 +171,13 @@ main = do
 loop :: Options -> Effect Unit
 loop opts = launchAff_ do
   dateTime <- liftEffect $ nowDateTime
+  -- TODO Remove + 1
   let roundedDateTime = fromMaybe dateTime $ adjust (negateDuration $ (\ms -> Duration.Milliseconds ms) $ toNumber $ (\i -> i + 1) $ fromEnum $ millisecond $ time dateTime) dateTime
   liftEffect $ log $ "Time: " <> format iso8601Formatter roundedDateTime
   relations <- parSequence $ map (getRelationForSource roundedDateTime) (Array.fromFoldable opts.sources) :: Aff (Array Relation)
   let joined = fromMaybe (newRelation (RelationHeader [])) $ (foldl1 naturalJoin) <$> (NonEmpty.fromArray relations)
   let builtinJoined = foldl filterBuiltin joined $ Array.fromFoldable opts.builtins
+  postRelationToGoal roundedDateTime opts.goal builtinJoined
   liftEffect $ logShow builtinJoined
   pure unit
 
@@ -257,6 +258,24 @@ getRelationForSource dateTime (Stream uri pred variables) = do
       let obsQuads = concatMap (\qs -> filter (\q -> predicate q == pred) qs) obsQuadArrays
       let relation = newRelation (RelationHeader [ var1, var2 ])
       pure $ foldl (\r q -> addRow (RelationRow [ subject q, object q ]) r) relation obsQuads
+
+postRelationToGoal :: DateTime -> Stream -> Relation -> Aff Unit
+postRelationToGoal dateTime (Stream uri pred variables) (Relation (RelationHeader header) rows) = do
+  case variables of
+    Unary var -> if length payload > 0 then postQuads (payload <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri else pure unit
+      where
+        payload :: Array Quad
+        payload = map (\t -> quad t (namedNode' rdf "type") pred defaultGraph) $ mapMaybe (getTermFromRelationRow var) rows
+    Binary var1 var2 -> if length payload > 0 then postQuads (payload <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri else pure unit
+      where
+        payload :: Array Quad
+        payload = map (\(Tuple t1 t2) -> quad t1 pred t2 defaultGraph) $ mapMaybe (\r -> Tuple <$> (getTermFromRelationRow var1 r) <*> (getTermFromRelationRow var2 r)) rows
+    where
+      getTermFromRelationRow :: Term -> RelationRow -> Maybe Term
+      getTermFromRelationRow head (RelationRow row) = do
+        i <- findIndex (\h -> h == head) header
+        row !! i
+
 
 --datalogFromQuads :: Array Quad -> Maybe Fact
 --datalogFromQuads quads = do

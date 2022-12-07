@@ -19,7 +19,6 @@ to generate this file without the comments in this block.
   , "console"
   , "control"
   , "datetime"
-  , "debug"
   , "effect"
   , "either"
   , "enums"

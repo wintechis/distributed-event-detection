@@ -12,7 +12,7 @@ import Data.Set as Set
 import Data.String (joinWith)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
-import Effect.Console (logShow)
+import Effect.Console (log)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (writeTextFile)
 
@@ -54,24 +54,6 @@ derive instance eqRule :: Eq Rule
 derive instance ordRule :: Ord Rule
 
 type Program = Array Rule
-
-speedLessThanEqual30 :: Rule
-speedLessThanEqual30 = Rule (Formula (Predicate "speed_less_than_equal_30") [ Variable "car" ]) [ Formula (Predicate "speed") [ Variable "car", Variable "speed" ], Formula (Predicate "less_than_equal") [ Variable "speed", Constant "30" ] ]
-
-speed0 :: Rule
-speed0 = Rule (Formula (Predicate "speed_0") [ Variable "car" ]) [ Formula (Predicate "speed") [ Variable "car", Variable "speed" ], Formula (Predicate "less_than_equal") [ Variable "speed", Constant "0" ] ]
-
-lightjam :: Rule
-lightjam = Rule (Formula (Predicate "light_jam") [ Variable "car" ]) [ BoxMinus (Interval 0 15) (Formula (Predicate "speed_less_than_equal_30") [ Variable "car" ]) ]
-
-mediumjam :: Rule
-mediumjam = Rule (Formula (Predicate "medium_jam") [ Variable "car" ]) [ Formula (Predicate "light_jam") [ Variable "car" ], DiamondMinus (Interval 0 30) (BoxMinus (Interval 0 3) (Formula (Predicate "speed_0") [ Variable "car" ])) ]
-
-heavyjam :: Rule
-heavyjam = Rule (Formula (Predicate "heavy_jam") [ Variable "car" ]) [ Formula (Predicate "light_jam") [ Variable "car" ], BoxMinus (Interval 0 30) (DiamondMinus (Interval 0 10) (BoxMinus (Interval 0 3) (Formula (Predicate "speed_0") [ Variable "car" ]))) ]
-
-jam :: Program
-jam = [ speedLessThanEqual30, speed0, lightjam, mediumjam, heavyjam ]
 
 testFormula :: Formula
 testFormula = BoxPlus (Interval 3 10) (BoxPlus (Interval 4 15) (Formula (Predicate "p") [ Variable "a", Constant "c" ]))
@@ -209,9 +191,30 @@ dot program = "digraph G {\n" <> joinWith "\n" (map scNode (toUnfoldable $ getIn
       agentName = "agent_" <> joinWith "_" (map getPredicateString body) <> "_BoxPlus_" <> headPred
   agentNode (Rule _ _ ) = "// Something went wrong here (No Match)!"
 
+showProgram :: Program -> String
+showProgram rules = "[\n" <> joinWith "\n" (map (\r -> "  " <> show r) rules) <> "\n]"
+
+speedLessThanEqual30 :: Rule
+speedLessThanEqual30 = Rule (Formula (Predicate "speed_less_than_equal_30") [ Variable "car" ]) [ Formula (Predicate "speed") [ Variable "car", Variable "speed" ], Formula (Predicate "less_than_equal") [ Variable "speed", Constant "30" ] ]
+
+speed0 :: Rule
+speed0 = Rule (Formula (Predicate "speed_less_than_equal_0") [ Variable "car" ]) [ Formula (Predicate "speed") [ Variable "car", Variable "speed" ], Formula (Predicate "less_than_equal") [ Variable "speed", Constant "0" ] ]
+
+lightjam :: Rule
+lightjam = Rule (Formula (Predicate "light_jam") [ Variable "car" ]) [ BoxMinus (Interval 0 15) (Formula (Predicate "speed_less_than_equal_30") [ Variable "car" ]) ]
+
+mediumjam :: Rule
+mediumjam = Rule (Formula (Predicate "medium_jam") [ Variable "car" ]) [ Formula (Predicate "light_jam") [ Variable "car" ], DiamondMinus (Interval 0 30) (BoxMinus (Interval 0 3) (Formula (Predicate "speed_less_than_equal_0") [ Variable "car" ])) ]
+
+heavyjam :: Rule
+heavyjam = Rule (Formula (Predicate "heavy_jam") [ Variable "car" ]) [ Formula (Predicate "light_jam") [ Variable "car" ], BoxMinus (Interval 0 30) (DiamondMinus (Interval 0 10) (BoxMinus (Interval 0 3) (Formula (Predicate "speed_less_than_equal_0") [ Variable "car" ]))) ]
+
+jam :: Program
+jam = [ speedLessThanEqual30, speed0, lightjam, mediumjam, heavyjam ]
+
 main :: Effect Unit
 main = do
-  logShow jam
-  logShow $ normalForm jam
-  writeTextFile UTF8 "docker-compose.yml" (dockerCompose $ normalForm jam)
+  --log $ showProgram jam
+  log $ showProgram $ normalForm jam
   writeTextFile UTF8 "plan.dot" (dot $ normalForm jam)
+  writeTextFile UTF8 "docker-compose.yml" (dockerCompose $ normalForm jam)

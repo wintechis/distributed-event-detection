@@ -5,8 +5,9 @@ import Prelude
 import Affjax.Node (defaultRequest, printError, request)
 import Affjax.RequestBody as RequestBody
 import Affjax.RequestHeader (RequestHeader(..))
-import Data.Array (catMaybes, (!!))
-import Data.DateTime (adjust, millisecond, time)
+import Control.Parallel (parSequence_)
+import Data.Array (catMaybes, length, mapWithIndex, (!!))
+import Data.DateTime (DateTime, adjust, millisecond, time)
 import Data.Either (Either(..))
 import Data.Enum (fromEnum)
 import Data.Formatter.DateTime (Formatter, FormatterCommand(..), format)
@@ -18,7 +19,7 @@ import Data.String (Pattern(..), split)
 import Data.Time.Duration (negateDuration)
 import Data.Time.Duration as Duration
 import Effect (Effect)
-import Effect.Aff (launchAff_)
+import Effect.Aff (Aff, launchAff_)
 import Effect.Class (liftEffect)
 import Effect.Console (log)
 import Effect.Now (nowDateTime)
@@ -48,25 +49,30 @@ main :: Effect Unit
 main = do
   options <-liftEffect $ execParser optsInfo
   csv <- readTextFile UTF8 options.csvFileName
-  let values = catMaybes $ fromString <$> split (Pattern "\n") csv
+  let values = map (\v -> catMaybes $ fromString <$> split (Pattern ",") v) $ split (Pattern "\n") csv
   iRef <- new 0
   _ <- setInterval 1000 $ streamValues options.uri values iRef
   pure unit
 
-streamValues :: String -> Array Int -> Ref Int -> Effect Unit
-streamValues scUri values iRef = launchAff_ do
+streamValues :: String -> Array (Array Int) -> Ref Int -> Effect Unit
+streamValues scUri valuesArray iRef = launchAff_ do
   dateTime <- liftEffect nowDateTime
   let roundedDateTime = fromMaybe dateTime $ adjust (negateDuration $ (\ms -> Duration.Milliseconds ms) $ toNumber $ fromEnum $ millisecond $ time dateTime) dateTime
   i <- liftEffect $ read iRef
   liftEffect $ modify_ (\j -> j + 1) iRef
-  case values !! i of 
+  case valuesArray !! i of 
     Nothing -> do
       liftEffect $ write 0 iRef 
-    Just value -> do
-      res <- request $ defaultRequest { method = Left POST, url = scUri, headers = [ RequestHeader "Content-Type" "text/turtle" ], content = (Just $ RequestBody.string $ "<http://ex.org/cars/1> <http://ex.org/vocab/speed> " <> show value <> " .\n<> <http://ex.org/vocab/timestamp> \"" <> format iso8601Formatter roundedDateTime <> "\"^^<http://www.w3.org/2001/XMLSchema#dateTime> .") }
-      liftEffect $ case res of 
-        Left error -> log $ printError error
-        Right _ -> pure unit
+      liftEffect $ streamValues scUri valuesArray iRef
+    Just values -> parSequence_ $ mapWithIndex (\j v -> sendRequest scUri roundedDateTime j v if j == (length values - 1) then true else false) values
+
+sendRequest :: String -> DateTime -> Int -> Int -> Boolean -> Aff Unit
+sendRequest scUri datetime i value poison = do
+  res <- request $ defaultRequest { method = Left POST, url = scUri, headers = [ RequestHeader "Content-Type" "text/turtle" ], content = (Just $ RequestBody.string $ "<http://ex.org/cars/" <> show i <> "> <http://ex.org/vocab/speed> " <> show value <> " .\n<> <http://ex.org/vocab/timestamp> \"" <> format iso8601Formatter datetime <> "\"^^<http://www.w3.org/2001/XMLSchema#dateTime> ." <> if poison then "\n<> <http://ex.org/vocab/poison> true ." else "") }
+  liftEffect $ case res of 
+    Left error -> log $ printError error
+    Right _ -> pure unit
+  
 
 type Options = {
     csvFileName :: String,

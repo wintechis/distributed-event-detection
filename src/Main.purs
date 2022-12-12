@@ -8,8 +8,8 @@ import Affjax.RequestHeader (RequestHeader(..))
 import Affjax.ResponseFormat (string)
 import CLI (Builtin(..), Options, Stream(..), Terms(..), optsInfo)
 import Control.Alternative (guard)
-import Control.Parallel (parSequence)
-import Data.Array (catMaybes, concatMap, filter, findIndex, foldl, index, length, mapMaybe, mapWithIndex, (!!))
+import Control.Parallel (parSequence, parSequence_, parTraverse)
+import Data.Array (catMaybes, concatMap, filter, find, findIndex, foldl, index, length, mapMaybe, mapWithIndex, (!!))
 import Data.Array as Array
 import Data.Array.NonEmpty (foldl1)
 import Data.Array.NonEmpty as NonEmpty
@@ -20,7 +20,7 @@ import Data.Foldable (and)
 import Data.Formatter.DateTime (Formatter, FormatterCommand(..), format)
 import Data.HTTP.Method (Method(..))
 import Data.Int (toNumber)
-import Data.List (fromFoldable)
+import Data.List (List(..), delete, fromFoldable, (:))
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Number (fromString)
 import Data.Set (Set, member)
@@ -28,12 +28,15 @@ import Data.Set as Set
 import Data.String (joinWith)
 import Data.Time.Duration (negateDuration)
 import Data.Time.Duration as Duration
+import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..), snd)
 import Effect (Effect)
 import Effect.Aff (Aff, launchAff_)
 import Effect.Class (liftEffect)
 import Effect.Console (log, logShow)
 import Effect.Now (nowDateTime)
+import Effect.Ref (Ref, modify_, new, read)
+import Effect.Ref as Ref
 import Effect.Timer (setInterval)
 import N3 (Format(..), parse, write)
 import Options.Applicative (execParser)
@@ -113,41 +116,46 @@ naturalJoin (Relation (RelationHeader header1) rows1) (Relation (RelationHeader 
     combinedHeaders = RelationHeader $ header1 <> catMaybes (mapWithIndex (\i v -> if member i header2ForRemoval then Nothing else Just v) header2 )
 
 
-getRelationForSource :: DateTime -> Stream -> Aff Relation
+getRelationForSource :: DateTime -> Stream -> Aff (Maybe Relation)
 getRelationForSource dateTime (Stream uri pred variables) = do
   containerQuads <- getQuads dateTime uri
-  let obsInWindow = map (\q -> value $ object q) $ filter (\q -> subject q == namedNode uri && predicate q == namedNode "http://ex.org/vocab/inWindow") containerQuads
-  obsQuadArrays <- parSequence $ getQuads dateTime <$> obsInWindow :: Aff (Array (Array Quad))
-  case variables of 
-    Unary var -> do
-      let obsQuads = concatMap (\qs -> filter (\q -> object q == pred && predicate q == namedNode' rdf "type" ) qs) obsQuadArrays
-      let relation = newRelation (RelationHeader [ var ])
-      pure $ foldl (\r q -> addRow (RelationRow [ subject q ]) r) relation obsQuads
-    Binary var1 var2 -> do
-      let obsQuads = concatMap (\qs -> filter (\q -> predicate q == pred) qs) obsQuadArrays
-      let relation = newRelation (RelationHeader [ var1, var2 ])
-      pure $ foldl (\r q -> addRow (RelationRow [ subject q, object q ]) r) relation obsQuads
+  case find (\q -> predicate q == namedNode "http://ex.org/vocab/poisoned" && object q == literalType "true" (namedNode' xsd "boolean")) containerQuads of
+    Nothing -> pure Nothing
+    Just q | object q == literalType "false" (namedNode' xsd "boolean") -> pure Nothing
+    _ -> do
+      let obsInWindow = map (\q -> value $ object q) $ filter (\q -> subject q == namedNode uri && predicate q == namedNode "http://ex.org/vocab/inWindow") containerQuads
+      obsQuadArrays <- parSequence $ getQuads dateTime <$> obsInWindow :: Aff (Array (Array Quad))
+      case variables of 
+        Unary var -> do
+          let obsQuads = concatMap (\qs -> filter (\q -> object q == pred && predicate q == namedNode' rdf "type" ) qs) obsQuadArrays
+          let relation = newRelation (RelationHeader [ var ])
+          pure $ Just $ foldl (\r q -> addRow (RelationRow [ subject q ]) r) relation obsQuads
+        Binary var1 var2 -> do
+          let obsQuads = concatMap (\qs -> filter (\q -> predicate q == pred) qs) obsQuadArrays
+          let relation = newRelation (RelationHeader [ var1, var2 ])
+          pure $ Just $ foldl (\r q -> addRow (RelationRow [ subject q, object q ]) r) relation obsQuads
 
 postRelationToGoal :: DateTime -> Stream -> Relation -> Aff Unit
 postRelationToGoal dateTime (Stream uri pred variables) (Relation (RelationHeader header) rows) = do
   case variables of
-    Unary var -> if length payload > 0 then postQuads (payload <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri else pure unit
+    Unary var -> if length payload > 0 then parSequence_ $ map (\quads -> postQuads (quads <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri) payload else postQuads [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph, quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] uri
       where
-        payload :: Array Quad
-        payload = map (\t -> quad t (namedNode' rdf "type") pred defaultGraph) $ mapMaybe (getTermFromRelationRow var) rows
-    Binary var1 var2 -> if length payload > 0 then postQuads (payload <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri else pure unit
+        payload :: Array (Array Quad)
+        payload = map (\(Tuple i t) -> [ quad t (namedNode' rdf "type") pred defaultGraph ] <> if i == (length rows) - 1 then [ quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] else []) $ catMaybes $ mapWithIndex (getTermFromRelationRow var) rows
+    Binary var1 var2 -> if length payload > 0 then parSequence_ $ map (\quads -> postQuads (quads <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri) payload else postQuads [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph, quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] uri
       where
-        payload :: Array Quad
-        payload = map (\(Tuple t1 t2) -> quad t1 pred t2 defaultGraph) $ mapMaybe (\r -> Tuple <$> (getTermFromRelationRow var1 r) <*> (getTermFromRelationRow var2 r)) rows
+        payload :: Array (Array Quad)
+        payload = map (\(Tuple (Tuple i t1) (Tuple _ t2)) -> [ quad t1 pred t2 defaultGraph ] <> if i == (length rows) - 1 then [ quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] else []) $ catMaybes $ mapWithIndex (\i r -> Tuple <$> (getTermFromRelationRow var1 i r) <*> (getTermFromRelationRow var2 i r)) rows
     where
-      getTermFromRelationRow :: Term -> RelationRow -> Maybe Term
-      getTermFromRelationRow head (RelationRow row) = do
+      getTermFromRelationRow :: Term -> Int -> RelationRow -> Maybe (Tuple Int Term)
+      getTermFromRelationRow head index (RelationRow row) = do
         i <- findIndex (\h -> h == head) header
-        row !! i
+        elem <- row !! i
+        Just $ Tuple index elem
 
 getQuads :: DateTime -> URL -> Aff (Array Quad)
 getQuads acceptDateTime url = do
-  liftEffect $ log ("GET " <> url)
+  liftEffect $ log ("GET " <> url <> "\tAccept-Datetime: " <> format iso8601Formatter acceptDateTime)
   responseOrError <- request (defaultRequest { url = url, method = Left GET, responseFormat = string, headers = [ RequestHeader "Accept-Datetime" $ format iso8601Formatter acceptDateTime ] })
   case responseOrError of 
     Left error -> do
@@ -170,16 +178,31 @@ main :: Effect Unit
 main = do
   opts <-execParser optsInfo
   logShow opts
-  void $ setInterval 1000 $ loop opts
+  queueRef <- new Nil
+  _ <- setInterval 1000 $ newElement queueRef
+  void $ setInterval 500 $ work opts queueRef
 
-loop :: Options -> Effect Unit
-loop opts = launchAff_ do
+newElement :: Ref (List DateTime) -> Effect Unit
+newElement queueRef = do
   dateTime <- liftEffect $ nowDateTime
-  -- TODO Remove + 1
-  let roundedDateTime = fromMaybe dateTime $ adjust (negateDuration $ (\ms -> Duration.Milliseconds ms) $ toNumber $ (\i -> i + 1) $ fromEnum $ millisecond $ time dateTime) dateTime
+  let roundedDateTime = fromMaybe dateTime $ adjust (negateDuration $ (\ms -> Duration.Milliseconds ms) $ toNumber $ fromEnum $ millisecond $ time dateTime) dateTime
   liftEffect $ log $ "Time: " <> format iso8601Formatter roundedDateTime
-  relations <- parSequence $ map (getRelationForSource roundedDateTime) (Array.fromFoldable opts.sources) :: Aff (Array Relation)
-  let joined = fromMaybe (newRelation (RelationHeader [])) $ (foldl1 naturalJoin) <$> (NonEmpty.fromArray relations)
-  let builtinJoined = foldl filterBuiltin joined $ Array.fromFoldable opts.builtins
-  postRelationToGoal roundedDateTime opts.goal builtinJoined
-  liftEffect $ logShow builtinJoined
+  modify_ (\queue -> roundedDateTime : queue) queueRef
+
+work :: Options -> Ref (List DateTime) -> Effect Unit
+work opts queueRef = launchAff_ do
+  queue <- liftEffect $ read queueRef
+  toRemove <- parTraverse (workOne opts) queue :: Aff (List (Maybe DateTime))
+  liftEffect $ Ref.write (foldl (\q dt -> delete dt q) queue (catMaybes $ Array.fromFoldable toRemove)) queueRef
+
+workOne :: Options -> DateTime -> Aff (Maybe DateTime)
+workOne opts datetime = do
+  maybeRelations <- parSequence $ map (getRelationForSource datetime) (Array.fromFoldable opts.sources) :: Aff (Array (Maybe Relation))
+  case sequence maybeRelations of 
+    Nothing -> pure Nothing
+    Just relations -> do
+      let joined = fromMaybe (newRelation (RelationHeader [])) $ (foldl1 naturalJoin) <$> (NonEmpty.fromArray relations)
+      let builtinJoined = foldl filterBuiltin joined $ Array.fromFoldable opts.builtins
+      postRelationToGoal datetime opts.goal builtinJoined
+      liftEffect $ logShow builtinJoined
+      pure $ Just datetime

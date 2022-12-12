@@ -30,7 +30,7 @@ import Prelude
 
 import CLI (Window(..), optsInfo)
 import Control.Monad.Error.Class (try)
-import Data.Array (catMaybes, concat, dropEnd, filter, find, head, length, mapMaybe, mapWithIndex, range, snoc, (!!))
+import Data.Array (concat, dropWhile, filter, find, head, last, length, mapMaybe, mapWithIndex, snoc)
 import Data.Array as Array
 import Data.DateTime (DateTime, adjust, diff)
 import Data.Either (Either(..), hush)
@@ -48,6 +48,7 @@ import Data.Set as Set
 import Data.String (joinWith, toUpper)
 import Data.String.CaseInsensitive (CaseInsensitiveString(..))
 import Data.Time.Duration (Milliseconds(..), Seconds(..), negateDuration)
+import Data.Tuple (Tuple(..), fst, snd)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (liftEffect)
 import Effect.Console (log)
@@ -66,16 +67,25 @@ import RDF.Prefixes (Prefix(..), ldp, rdf, xsd)
 ldpsc :: Prefix
 ldpsc = Prefix "https://solid.ti.rw.fau.de/public/ns/stream-containers#"
 
-data StreamContainer = StreamContainer (Array Graph) (Array Window)
+data StreamContainer = StreamContainer (Array (Tuple Int Graph)) (Array Window)
 
 emptyStreamContainer :: StreamContainer
 emptyStreamContainer = StreamContainer [] []
 
-addGraphToStreamContainer :: Graph -> StreamContainer -> StreamContainer
-addGraphToStreamContainer graph (StreamContainer graphArray windowArray) = StreamContainer (snoc graphArray graph) windowArray
+addGraphToStreamContainer :: DateTime -> Graph -> StreamContainer -> StreamContainer
+addGraphToStreamContainer datetime newGraph (StreamContainer graphArray windowArray) = StreamContainer (snoc (dropWhile graphTooOld graphArray) (Tuple nextIdx newGraph)) windowArray
+  where
+    nextIdx :: Int
+    nextIdx = fromMaybe 0 $ (add 1) <$> fst <$> last graphArray
+    graphTooOld :: Tuple Int Graph -> Boolean
+    graphTooOld graph = fromMaybe true do
+        quad <- Set.findMax $ Set.filter (\q -> predicate q == namedNode "http://ex.org/vocab/timestamp") $ snd graph
+        timestamp <- hush $ runParser (value $ object quad) parseDateTime
+        tenSecondsBack <- adjust (negateDuration $ Milliseconds 10000.0) datetime
+        pure $ timestamp < tenSecondsBack
 
-getGraphFromStreamContainer :: Int -> StreamContainer -> Maybe Graph
-getGraphFromStreamContainer i (StreamContainer graphArray _) = graphArray !! i
+getGraphFromStreamContainer :: Int -> StreamContainer -> Maybe (Tuple Int Graph)
+getGraphFromStreamContainer i (StreamContainer graphArray _) = find (\(Tuple i2 _) -> i == i2) graphArray
 
 addWindowToStreamContainer :: Window -> StreamContainer -> StreamContainer
 addWindowToStreamContainer window (StreamContainer graphArray windowArray) = StreamContainer graphArray (snoc windowArray $ window)
@@ -83,23 +93,21 @@ addWindowToStreamContainer window (StreamContainer graphArray windowArray) = Str
 nextGraphId :: StreamContainer -> Int
 nextGraphId (StreamContainer graphArray _) = length graphArray
 
-getGraphsInWindow :: Array Graph -> DateTime -> Term -> Milliseconds -> Milliseconds -> Array Int
-getGraphsInWindow graphArray now contentTimestampRelation startDuration endDuration = catMaybes $ mapWithIndex (\index graph -> booleanToMabyeIndex index $ isGraphInWindow now contentTimestampRelation startDuration endDuration graph) graphArray
-  where
-    booleanToMabyeIndex index graphInWindow = if graphInWindow then Just index else Nothing
+getGraphsInWindow :: Array (Tuple Int Graph) -> DateTime -> Term -> Milliseconds -> Milliseconds -> Array (Tuple Int Graph)
+getGraphsInWindow graphArray now contentTimestampRelation startDuration endDuration = filter (\graph -> isGraphInWindow now contentTimestampRelation startDuration endDuration graph) graphArray
 
-isGraphInWindow :: DateTime -> Term -> Milliseconds -> Milliseconds -> Graph -> Boolean
-isGraphInWindow now contentTimestampRelation startDuration endDuration graph = fromMaybe false do 
+isGraphInWindow :: DateTime -> Term -> Milliseconds -> Milliseconds -> Tuple Int Graph -> Boolean
+isGraphInWindow now contentTimestampRelation startDuration endDuration (Tuple _ graph) = fromMaybe false do 
   quad <- Set.findMax $ Set.filter (\q -> predicate q == contentTimestampRelation) graph
   timestamp <- hush $ runParser (value $ object quad) parseDateTime
   windowStart <- adjust startDuration now
   windowEnd <- adjust endDuration now
   pure $ timestamp <= windowStart && timestamp >= windowEnd
 
-membershipQuads :: DateTime -> Array Graph -> Window -> Array Quad
-membershipQuads now graphArray (Window memberRelation membershipResource contentTimestampRelation _ _ startDuration endDuration) = map (\i -> quad membershipResource memberRelation (namedNode $ "/" <> show i) defaultGraph) $ getGraphsInWindow graphArray now contentTimestampRelation startDuration endDuration
+membershipQuads :: DateTime -> Array (Tuple Int Graph) -> Window -> Array Quad
+membershipQuads now graphArray (Window memberRelation membershipResource contentTimestampRelation _ _ startDuration endDuration) = map (\(Tuple i _) -> quad membershipResource memberRelation (namedNode $ "/" <> show i) defaultGraph) $ getGraphsInWindow graphArray now contentTimestampRelation startDuration endDuration
 
-poisonedQuads :: DateTime -> Array Graph -> Window -> Array Quad
+poisonedQuads :: DateTime -> Array (Tuple Int Graph) -> Window -> Array Quad
 poisonedQuads now graphArray (Window _ membershipResource contentTimestampRelation poisonRelation contentPoisonRelation startDuration endDuration) = if (Set.size $ Set.difference (allTimestampsInWindow (fromMaybe now $ adjust startDuration now) (fromMaybe now $ adjust endDuration now)) (Set.fromFoldable $ mapMaybe getPoisonedTimestamp inWindow)) == 0
   then
     [ quad membershipResource poisonRelation (literalType "true" (namedNode' xsd "boolean")) defaultGraph ]
@@ -108,20 +116,20 @@ poisonedQuads now graphArray (Window _ membershipResource contentTimestampRelati
   where
     allTimestampsInWindow :: DateTime -> DateTime -> Set DateTime
     allTimestampsInWindow start end = if diff start end < Milliseconds 0.0 then Set.empty else Set.union (Set.singleton start) (allTimestampsInWindow (fromMaybe end $ adjust (negateDuration $ Seconds 1.0) start) end)
-    inWindow :: Array Graph
+    inWindow :: Array (Tuple Int Graph)
     inWindow = filter (isGraphInWindow now contentTimestampRelation startDuration endDuration) graphArray
-    getPoisonedTimestamp :: Graph -> Maybe DateTime 
-    getPoisonedTimestamp graph = case find (\q -> predicate q == contentPoisonRelation && object q == literalType "true" (namedNode' xsd "boolean")) (Array.fromFoldable graph) of 
+    getPoisonedTimestamp :: (Tuple Int Graph) -> Maybe DateTime 
+    getPoisonedTimestamp graph = case find (\q -> predicate q == contentPoisonRelation && object q == literalType "true" (namedNode' xsd "boolean")) (Array.fromFoldable $ snd graph) of 
       Nothing -> Nothing
       Just _ -> do
-        q <- find (\q -> predicate q == contentTimestampRelation) (Array.fromFoldable graph)
+        q <- find (\q -> predicate q == contentTimestampRelation) (Array.fromFoldable $ snd graph)
         hush $ runParser (value $ object q) parseDateTime
 
 streamContainerToQuads :: DateTime -> StreamContainer -> Array Quad
 streamContainerToQuads now (StreamContainer graphArray windowArray) = [
   quad (namedNode "") (namedNode' rdf "type") (namedNode' ldpsc "StreamContainer") defaultGraph
 ] <>
-  map (\i -> quad (namedNode "") (namedNode' ldp "contains") (namedNode $ "/" <> show i) defaultGraph) (dropEnd 1 (range 0 (length graphArray))) <>
+  map (\(Tuple i _) -> quad (namedNode "") (namedNode' ldp "contains") (namedNode $ "/" <> show i) defaultGraph) graphArray <>
   (concat $ mapWithIndex windowToQuads windowArray) <>
   (concat $ membershipQuads now graphArray <$> windowArray) <>
   (concat $ poisonedQuads now graphArray <$> windowArray)
@@ -168,7 +176,7 @@ mimeForFormat NTriples = "application/n-triples"
 mimeForFormat NQuads = "application/n-quads"
 
 getUnionGraph :: StreamContainer -> Graph
-getUnionGraph (StreamContainer graphs _) = foldl union empty graphs
+getUnionGraph (StreamContainer graphs _) = foldl union empty $ snd <$> graphs
 
 router :: Int -> Ref StreamContainer -> Request -> ResponseM
 -- GET /
@@ -205,7 +213,8 @@ router port streamContainerRef request@{ method: Post, path: [], body, headers: 
       logError $ "Parsing request body failed: " <> message error
       logResponse request $ badRequest $ "Parsing request body failed: " <> message error
     Right quads -> do
-      liftEffect $ modify_ (addGraphToStreamContainer $ fromFoldable quads) streamContainerRef
+      datetime <- liftEffect nowDateTime
+      liftEffect $ modify_ (addGraphToStreamContainer datetime $ fromFoldable quads) streamContainerRef
       logResponse request created
 -- GET /all
 router port streamContainerRef request@{ method: Get, path : [ "all" ], headers: (Headers headers) } = do
@@ -221,7 +230,7 @@ router port streamContainerRef request@{ method: Get, path, headers: (Headers he
     Nothing -> logResponse request notFound
     Just graph -> do
       let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-      payload <- try $ write ("http://127.0.0.1:" <> show port <> "/" <> show i) format $ Array.fromFoldable graph
+      payload <- try $ write ("http://127.0.0.1:" <> show port <> "/" <> show i) format $ Array.fromFoldable $ snd graph
       case payload of 
         Left error -> do
           logError $ "Serializing triples for contained resource failed: " <> message error

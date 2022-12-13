@@ -105,3 +105,4 @@ let upstream =
 in  upstream
   with rdf = ../rdfps/spago.dhall as Location
   with n3 = ../n3.purs/spago.dhall as Location
+

@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "plan-generator"
+		},
+		{
+			"path": "stream-container"
+		},
+		{
+			"path": "stream-agent"
+		},
+		{
+			"path": "stream-provider"
+		},
+		{
+			"path": "lib/datalogmtl"
+		}
+	],
+	"settings": {}
+}

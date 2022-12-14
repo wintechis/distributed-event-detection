@@ -99,8 +99,7 @@ in  upstream
 -------------------------------
 -}
 let upstream =
-      https://github.com/purescript/package-sets/releases/download/psc-0.15.4-20221203/packages.dhall
-        sha256:c08f45a460d46449cb61ba8a888168ccc3d33638f6803b2b716055e9d2532f4a
-in  upstream
-  with n3 = ../n3.purs/spago.dhall as Location
+      https://github.com/purescript/package-sets/releases/download/psc-0.15.4-20221214/packages.dhall
+        sha256:e462fb4d932e4bbc522cb563a71d312d6514f97050125d1a3f95cc3a2df3bffb
 
+in  upstream

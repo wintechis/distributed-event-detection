@@ -148,3 +148,13 @@ getIntervallsForPredicates program = Map.fromFoldable $ Set.map (\p -> Tuple p (
 
 showIntervalForPredicates :: Map Predicate (Set Interval) -> String
 showIntervalForPredicates fiMap = joinWith "\n" $ map (\(Tuple predicate intervals) -> show predicate <> ":\t" <> (joinWith ", " $ map show $ Array.fromFoldable intervals)) $ Map.toUnfoldable fiMap
+
+getPredicatesForRule :: Rule -> Array Predicate
+getPredicatesForRule (Rule head body) = getPredicateForFormula head : (getPredicateForFormula <$> body)
+
+getPredicateForFormula :: Formula -> Predicate 
+getPredicateForFormula (Pred pred _) = pred
+getPredicateForFormula (BoxPlus _ formula) = getPredicateForFormula formula
+getPredicateForFormula (BoxMinus _ formula) = getPredicateForFormula formula
+getPredicateForFormula (DiamondPlus _ formula) = getPredicateForFormula formula
+getPredicateForFormula (DiamondMinus _ formula) = getPredicateForFormula formula

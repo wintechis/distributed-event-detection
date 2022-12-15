@@ -16,6 +16,22 @@ import Effect.Console (log)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (writeTextFile)
 
+data Window = Window Int Int StreamContainer
+
+data StreamContainer = StreamContainer Term
+
+data Agent = And Window (Array Window) | Box Window Window | Diamond Window Window
+
+data LogicalPlan = LogicalPlan (Array Agent)
+
+--getLogicalPlan :: Program -> LogicalPlan
+--getLogicalPlan program = LogicalPlan []
+--  where
+--    streamContainers :: Map String StreamContainer
+--    streamContainers = foldl (\m r -> ) Map.empty program
+--      where
+--        
+
 dockerCompose :: Program -> String
 dockerCompose program = "services:\n" <> (joinWith "\n" $ mapWithIndex (\i (Tuple predicate intervals) -> "  " <> show predicate <> "-stream-container:\n" <> "    command: node index.js -p " <> show (9000 + i) <> joinWith "" (map (\(Interval start end) -> " -w \"#window-" <> show start <> "-" <> show end <> " http://ex.org/inWindow http://ex.org/timestamp " <> show start <> " " <> show end <> "\"") (Set.toUnfoldable intervals :: Array Interval)) <> "\n    ports:\n      - \"" <> show (9000 + i) <> ":" <> show (9000 + i) <> "\"\n    image: stream-container:latest") streamContainerList)
   where

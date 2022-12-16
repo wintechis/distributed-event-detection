@@ -14,9 +14,12 @@ to generate this file without the comments in this block.
 , dependencies =
   [ "arrays"
   , "console"
+  , "control"
   , "effect"
+  , "either"
   , "maybe"
   , "ordered-collections"
+  , "parsing"
   , "prelude"
   , "strings"
   , "tuples"

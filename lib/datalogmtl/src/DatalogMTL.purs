@@ -2,15 +2,22 @@ module DatalogMTL where
 
 import Prelude
 
-import Data.Array (concatMap, filter, length, mapMaybe, nub, (:))
+import Data.Array (concatMap, filter, fromFoldable, length, mapMaybe, nub, (:))
 import Data.Array as Array
+import Data.Array.NonEmpty (toArray)
+import Data.Array.NonEmpty.Internal (NonEmptyArray(..))
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
 import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
-import Data.Tuple (Tuple(..))
+import Data.String.Gen (genAlphaLowercaseString)
+import Data.Tuple (Tuple(..), fst)
+import Effect (Effect)
+import Effect.Console (logShow)
+import Test.QuickCheck (class Arbitrary, arbitrary, randomSeed)
+import Test.QuickCheck.Gen (Gen, arrayOf, arrayOf1, chooseInt, elements, resize, runGen, suchThat)
 
 type Time = Int
 
@@ -26,12 +33,21 @@ instance showTerm :: Show Term where
   show (Constant name) = name
 derive instance eqTerm :: Eq Term
 derive instance ordTerm :: Ord Term
+instance arbitraryTerm :: Arbitrary Term where
+  arbitrary = do
+    name <- resize 5 genAlphaLowercaseString
+    varOrConst <- elements $ NonEmptyArray [ Variable, Constant ]
+    pure $ varOrConst name
 
 data Predicate = Predicate String
 instance showPredicate :: Show Predicate where
   show (Predicate name) = name
 derive instance eqPredicate :: Eq Predicate
 derive instance ordPredicate :: Ord Predicate
+instance arbitraryPredicate :: Arbitrary Predicate where
+  arbitrary = do
+    name <- resize 7 genAlphaLowercaseString
+    pure $ Predicate name
 
 data Formula = Pred Predicate (Array Term) | BoxPlus Interval Formula | BoxMinus Interval Formula | DiamondPlus Interval Formula | DiamondMinus Interval Formula
 instance showFormula :: Show Formula where
@@ -42,14 +58,90 @@ instance showFormula :: Show Formula where
   show (DiamondMinus interval formula) = "◇-_" <> show interval <> " " <> show formula
 derive instance eqFormula :: Eq Formula
 derive instance ordFormula :: Ord Formula
+instance arbitraryFormula :: Arbitrary Formula where
+  arbitrary = do
+    constructor <- chooseInt 0 4
+    case constructor of 
+      1 -> do
+        intervalStart <- chooseInt 0 20
+        intervalEnd <- suchThat (chooseInt 0 20) (\end -> end >= intervalStart)
+        formula <- arbitrary
+        pure $ BoxPlus (Interval intervalStart intervalEnd) formula
+      2 -> do
+        intervalStart <- chooseInt 0 20
+        intervalEnd <- suchThat (chooseInt 0 20) (\end -> end >= intervalStart)
+        formula <- arbitrary
+        pure $ BoxMinus (Interval intervalStart intervalEnd) formula
+      3 -> do
+        intervalStart <- chooseInt 0 20
+        intervalEnd <- suchThat (chooseInt 0 20) (\end -> end >= intervalStart)
+        formula <- arbitrary
+        pure $ DiamondPlus (Interval intervalStart intervalEnd) formula
+      4 -> do
+        intervalStart <- chooseInt 0 20
+        intervalEnd <- suchThat (chooseInt 0 20) (\end -> end >= intervalStart)
+        formula <- arbitrary
+        pure $ DiamondMinus (Interval intervalStart intervalEnd) formula
+      _ -> do
+        pred <- arbitrary
+        terms <- (resize 3 <$> arrayOf) arbitrary
+        pure $ Pred pred terms
 
 data Rule = Rule Formula (Array Formula)
 instance showRule :: Show Rule where
   show (Rule head body) = show head <> " ← " <> joinWith " ∧ " (show <$> body)
 derive instance eqRule :: Eq Rule
 derive instance ordRule :: Ord Rule
+instance arbitraryRule :: Arbitrary Rule where
+  arbitrary = do
+    body <- toArray <$> (arrayOf1 $ suchThat (arbitrary :: Gen Formula) forwardPropagatingBody)
+    head <- suchThat (suchThat (arbitrary :: Gen Formula) forwardPropagatingHead) $ isSafe body
+    pure $ Rule head body
 
 type Program = Array Rule
+
+chooseTerms :: Gen (Set Term)
+chooseTerms = Set.fromFoldable <$> arrayOf1 arbitrary
+
+choosePredicates :: Gen (Set (Tuple Predicate Int))
+choosePredicates = Set.fromFoldable <$> arrayOf1 do
+  pred <- arbitrary
+  arity <- chooseInt 0 4
+  pure $ Tuple pred arity
+
+herbrandBaseFromTermsAndPredicates :: Set Term -> Set (Tuple Predicate Int) -> Set Formula
+herbrandBaseFromTermsAndPredicates universe predicates = Set.unions $ Set.map (\(Tuple pred i) -> Set.fromFoldable $ map (\terms -> Pred pred $ filterConsts terms) $ crossProductsOfDimension i $ fromFoldable universe) predicates
+
+crossProductsOfDimension :: forall a. Int -> Array a -> Array (Array a)
+crossProductsOfDimension 0 _ = []
+crossProductsOfDimension 1 array = map (\element -> [ element ]) array
+crossProductsOfDimension i array = map (\element restArray -> element : restArray) array <*> rest
+  where
+    rest = crossProductsOfDimension (i - 1) array
+
+forwardPropagatingHead :: Formula -> Boolean
+forwardPropagatingHead (Pred _ _) = true
+forwardPropagatingHead (BoxPlus _ rest) = forwardPropagatingHead rest
+forwardPropagatingHead (BoxMinus _ _) = false
+forwardPropagatingHead (DiamondPlus _ rest) = forwardPropagatingHead rest
+forwardPropagatingHead (DiamondMinus _ rest) = forwardPropagatingHead rest
+
+forwardPropagatingBody :: Formula -> Boolean
+forwardPropagatingBody (Pred _ _) = true
+forwardPropagatingBody (BoxPlus _ _) = false
+forwardPropagatingBody (BoxMinus _ rest) = forwardPropagatingBody rest
+forwardPropagatingBody (DiamondPlus _ _) = false
+forwardPropagatingBody (DiamondMinus _ rest) = forwardPropagatingBody rest
+
+isSafe :: Array Formula -> Formula -> Boolean
+isSafe body head = (Set.size $ Set.difference (getVariables head) (Set.unions $ getVariables <$> body)) == 0
+
+getVariables :: Formula -> Set Term
+getVariables (Pred _ terms) = Set.fromFoldable $ filterVars terms
+getVariables (BoxPlus _ rest) = getVariables rest
+getVariables (BoxMinus _ rest) = getVariables rest
+getVariables (DiamondPlus _ rest) = getVariables rest
+getVariables (DiamondMinus _ rest) = getVariables rest
 
 filterVars :: Array Term -> Array Term
 filterVars = filter f
@@ -158,3 +250,13 @@ getPredicateForFormula (BoxPlus _ formula) = getPredicateForFormula formula
 getPredicateForFormula (BoxMinus _ formula) = getPredicateForFormula formula
 getPredicateForFormula (DiamondPlus _ formula) = getPredicateForFormula formula
 getPredicateForFormula (DiamondMinus _ formula) = getPredicateForFormula formula
+
+main :: Effect Unit
+main = do
+  seed <- randomSeed
+  let terms = fst $ runGen chooseTerms { newSeed: seed, size: 10}
+  logShow terms
+  let predicates = fst $ runGen choosePredicates { newSeed: seed, size: 10}
+  logShow predicates
+  --let base = herbrandBaseFromTermsAndPredicates terms predicates
+  --logShow base

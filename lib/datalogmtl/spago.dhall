@@ -12,15 +12,22 @@ to generate this file without the comments in this block.
 -}
 { name = "datalogmtl"
 , dependencies =
-  [ "arrays"
+  [ "aff"
+  , "arrays"
   , "console"
   , "control"
+  , "debug"
   , "effect"
   , "either"
+  , "foldable-traversable"
+  , "gen"
   , "maybe"
   , "ordered-collections"
   , "parsing"
   , "prelude"
+  , "quickcheck"
+  , "spec"
+  , "spec-quickcheck"
   , "strings"
   , "tuples"
   ]

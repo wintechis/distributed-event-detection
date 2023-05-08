@@ -1,23 +1,27 @@
-module MainNew where
+module MainNew
+  ( Plan(..)
+  , ReasoningNode(..)
+  , ReasoningType(..)
+  , StreamNode(..)
+  , Window(..)
+  , createPlan
+  , getTermsWithWindows
+  , getTermsWithWindowsRule
+  )
+  where
 
 import Prelude
 
-import Backends.Dot (planToGraph)
 import Data.Array (catMaybes, concat, filter, fromFoldable, groupAllBy)
 import Data.Array as Array
 import Data.Array.NonEmpty (head, toArray)
-import Data.DotLang.Class (toText)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Set (Set)
 import Data.Set as Set
-import Data.String (joinWith)
 import Data.Tuple (Tuple(..), fst, snd)
-import DatalogMTL (Aggregation(..), Formula(..), Interval(..), Predicate(..), Program, Rule(..), Term(..), normalForm)
-import Effect (Effect)
-import Effect.Class.Console (log)
-import Effect.Console (logShow)
+import DatalogMTL (Formula(..), Interval(..), Predicate(..), Program, Rule(..))
 
 data StreamNode = StreamNode Predicate
 
@@ -42,12 +46,13 @@ data ReasoningNode = ReasoningNode ReasoningType (Array Window) StreamNode
 instance showReasoning :: Show ReasoningNode where
   show (ReasoningNode reasoningType windows streamNode) = show reasoningType <> ": " <> show windows <> " -> " <> show streamNode
 
-data ReasoningType = Box | Diamond | And
+data ReasoningType = Box | Diamond | And | Agg
 
 instance showReasoningType :: Show ReasoningType where
   show Box = "□"
   show Diamond = "◇"
   show And = "∧"
+  show Agg = "A"
 
 data Plan = Plan (Array ReasoningNode) (Array StreamNode) (Map StreamNode (Set Window))
 
@@ -63,6 +68,7 @@ createPlan program = Plan (catMaybes $ map ruleToReasoningNode program) (fromFol
     ruleToReasoningNode (Rule (Pred predH _) [ DiamondPlus (Interval start end) (Pred predB _) ]) = Just $ ReasoningNode Diamond [ (getWindow predB start end) ] $ StreamNode predH
     ruleToReasoningNode (Rule (Pred predH _) [ DiamondMinus (Interval start end) (Pred predB _) ]) = Just $ ReasoningNode Diamond [ (getWindow predB (negate start) (negate end)) ] $ StreamNode predH
     ruleToReasoningNode (Rule (Pred predH _) conj) = Just $ ReasoningNode And (catMaybes $ map getWindowConj conj) $ StreamNode predH
+    ruleToReasoningNode (AggrRule (Pred predH _) _ _ (Pred predB _)) = Just $ ReasoningNode Agg [ getWindow predB 0 0 ] $ StreamNode predH
     ruleToReasoningNode _ = Nothing
     getWindowConj :: Formula -> Maybe Window
     getWindowConj (Pred p _) = Just $ getWindow p 0 0
@@ -86,34 +92,3 @@ getTermsWithWindowsFormula (BoxMinus (Interval start end) (Pred predicate _)) = 
 getTermsWithWindowsFormula (DiamondPlus (Interval start end) (Pred predicate _)) = [Tuple predicate $ Tuple start end]
 getTermsWithWindowsFormula (DiamondMinus (Interval start end) (Pred predicate _)) = [Tuple predicate $ Tuple (negate start) (negate end)]
 getTermsWithWindowsFormula _ = []
-
--- New use case
-stopingForRedLight :: Rule
-stopingForRedLight = Rule (Pred (Predicate "stoping_for_red_light") [Variable "car"]) [ DiamondMinus (Interval 0 5) (Pred (Predicate "speed") [ Variable "car", Constant "0" ]), Pred (Predicate "traffic_light") [ Constant "red" ] ]
-
-avgSpeed5 :: Rule
-avgSpeed5 = AggrRule (Pred (Predicate "avg_speed_5") [ Variable "var", Variable "avg_speed" ]) Average (Variable "avg_speed") (DiamondMinus (Interval 0 5) (Pred (Predicate "speed") [ Variable "car", Variable "speed" ]))
-
-trafficJam :: Rule 
-trafficJam = Rule (Pred (Predicate "traffic_jam") [Variable "car"]) [ BoxMinus (Interval 0 60) (DiamondMinus (Interval 0 5) (Pred (Predicate "speed") [ Variable "car", Constant "0" ])) ]
-
-runningExample :: Program
-runningExample = [
-  stopingForRedLight,
-  avgSpeed5,
-  trafficJam
-]
-
-showProgram :: Program -> String
-showProgram rules = "[\n" <> joinWith "\n" (map (\r -> "  " <> show r) rules) <> "\n]"
-
-main :: Effect Unit
-main = do
-  log $ showProgram runningExample
-  log ""
-  log $ showProgram $ normalForm runningExample
-  log ""
-  logShow $ createPlan $ normalForm runningExample
-  log ""
-  log $ toText $ planToGraph $ createPlan $ normalForm runningExample
-  writeTextFile UTF8 "plan.dot" (toText $ planToGraph $ createPlan $ normalForm jam)

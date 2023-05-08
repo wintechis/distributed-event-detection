@@ -20,7 +20,7 @@ planToGraphReasoningNode :: Int -> ReasoningNode -> Definition
 planToGraphReasoningNode i (ReasoningNode reasoningType _ _) = NodeDef $ Node ("rn" <> show i) [ Shape Circle, Node.Label $ Node.TextLabel $ show reasoningType ]
 
 planToGraphStreamNode :: Map StreamNode (Set Window) -> StreamNode -> Definition
-planToGraphStreamNode wToS sNode@(StreamNode pred) = NodeDef $ Node (show pred) [ Shape Node.Record, Node.Label $ RecordLabel $ SubRecord $ [
+planToGraphStreamNode wToS sNode@(StreamNode pred _) = NodeDef $ Node (show pred) [ Shape Node.Record, Node.Label $ RecordLabel $ SubRecord $ [
       { fieldId: Nothing, value: SubRecord [
         { fieldId: Nothing, value: Base (show pred)},
         { fieldId: Nothing, value: SubRecord (
@@ -34,7 +34,7 @@ planToGraphStreamNode wToS sNode@(StreamNode pred) = NodeDef $ Node (show pred) 
     windows = fromMaybe [] $ fromFoldable <$> Map.lookup sNode wToS
 
 planToGraphEdges :: Int -> ReasoningNode -> Array Definition
-planToGraphEdges i (ReasoningNode _ windows (StreamNode pred)) = (EdgeDef $ Edge Forward ("rn" <> show i) (show pred) []) : (map (\(Window (StreamNode p) start end) -> EdgeDef $ Edge Forward (show p <> ":<" <> show start <> "_" <> show end <> ">") ("rn" <> show i) []) windows)
+planToGraphEdges i (ReasoningNode _ windows (StreamNode pred _)) = (EdgeDef $ Edge Forward ("rn" <> show i) (show pred) []) : (map (\(Window (StreamNode p _) start end) -> EdgeDef $ Edge Forward (show p <> ":<" <> show start <> "_" <> show end <> ">") ("rn" <> show i) []) windows)
 
 -- New use case
 stopingForRedLight :: Rule

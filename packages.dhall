@@ -103,3 +103,16 @@ let upstream =
         sha256:e462fb4d932e4bbc522cb563a71d312d6514f97050125d1a3f95cc3a2df3bffb
 in  upstream
   with datalogmtl = ./lib/datalogmtl/spago.dhall as Location
+  with dotlang = 
+        { dependencies = 
+            [ "colors"
+            , "console"
+            , "effect"
+            , "prelude"
+            , "psci-support"
+            , "strings"
+            , "test-unit"
+            ]
+        , repo = "https://github.com/csicar/purescript-dotlang.git"
+        , version = "v4.0.0"
+        }

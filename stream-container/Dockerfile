@@ -12,4 +12,6 @@ COPY output output
 COPY package.json .
 COPY index.js .
 
-CMD node index.js
+EXPOSE 8080
+
+CMD node index.js -p 8080

@@ -33,10 +33,21 @@ data LogicalPlan = LogicalPlan (Array Agent)
 --        
 
 dockerCompose :: Program -> String
-dockerCompose program = "services:\n" <> (joinWith "\n" $ mapWithIndex (\i (Tuple predicate intervals) -> "  " <> show predicate <> "-stream-container:\n" <> "    command: node index.js -p " <> show (9000 + i) <> joinWith "" (map (\(Interval start end) -> " -w \"#window-" <> show start <> "-" <> show end <> " http://ex.org/inWindow http://ex.org/timestamp " <> show start <> " " <> show end <> "\"") (Set.toUnfoldable intervals :: Array Interval)) <> "\n    ports:\n      - \"" <> show (9000 + i) <> ":" <> show (9000 + i) <> "\"\n    image: stream-container:latest") streamContainerList)
-  where
-    streamContainerList :: Array (Tuple Predicate (Set Interval))
-    streamContainerList = Map.toUnfoldable $ getIntervallsForPredicates $ normalForm program
+dockerCompose program = "services:\n"
+  <> (joinWith "\n" $ mapWithIndex (\i (Tuple predicate intervals) -> "  "
+    <> show predicate
+    <> "-stream-container:\n"
+    <> "    command: node index.js -p "
+    <> show (9000 + i)
+    <> joinWith "" (map (\(Interval start end) -> " -w \"#window-" <> show start <> "-" <> show end <> " http://ex.org/inWindow http://ex.org/timestamp http://ex.org/poisened http://ex.org/isPoisonous "  <> show start <> " " <> show end <> "\"") (Set.toUnfoldable intervals :: Array Interval))
+    <> "\n    ports:\n      - \""
+    <> show (9000 + i)
+    <> ":"
+    <> show (9000 + i)
+    <> "\"\n    image: stream-container:latest") streamContainerList)
+    where
+      streamContainerList :: Array (Tuple Predicate (Set Interval))
+      streamContainerList = Map.toUnfoldable $ getIntervallsForPredicates $ normalForm program
 
 dot :: Program -> String
 dot program = "digraph G {\n" <> joinWith "\n" (map scNode (toUnfoldable $ getIntervallsForPredicates program)) <> "\n" <> joinWith "\n" (map agentNode program) <> "\n}"

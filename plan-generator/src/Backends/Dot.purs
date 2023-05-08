@@ -32,29 +32,5 @@ planToGraphStreamNode wToS sNode@(StreamNode pred) = NodeDef $ Node ("\"" <> sho
     windows :: Array Window
     windows = fromMaybe [] $ fromFoldable <$> Map.lookup sNode wToS
 
-speedLessThanEqual30 :: Rule
-speedLessThanEqual30 = Rule (Pred (Predicate "speed_less_than_equal_30") [ Variable "car" ]) [ Pred (Predicate "speed") [ Variable "car", Variable "speed" ], Pred (Predicate "less_than_equal") [ Variable "speed", Constant "30" ] ]
-
-speed0 :: Rule
-speed0 = Rule (Pred (Predicate "speed_less_than_equal_0") [ Variable "car" ]) [ Pred (Predicate "speed") [ Variable "car", Variable "speed" ], Pred (Predicate "less_than_equal") [ Variable "speed", Constant "0" ] ]
-
-lightjam :: Rule
-lightjam = Rule (Pred (Predicate "light_jam") [ Variable "car" ]) [ BoxMinus (Interval 0 15) (Pred (Predicate "speed_less_than_equal_30") [ Variable "car" ]) ]
-
-mediumjam :: Rule
-mediumjam = Rule (Pred (Predicate "medium_jam") [ Variable "car" ]) [ Pred (Predicate "light_jam") [ Variable "car" ], DiamondMinus (Interval 0 30) (BoxMinus (Interval 0 3) (Pred (Predicate "speed_less_than_equal_0") [ Variable "car" ])) ]
-
-heavyjam :: Rule
-heavyjam = Rule (Pred (Predicate "heavy_jam") [ Variable "car" ]) [ Pred (Predicate "light_jam") [ Variable "car" ], BoxMinus (Interval 0 30) (DiamondMinus (Interval 0 10) (BoxMinus (Interval 0 3) (Pred (Predicate "speed_less_than_equal_0") [ Variable "car" ]))) ]
-
-jam :: Program
-jam = [ speedLessThanEqual30, speed0, lightjam, mediumjam, heavyjam ]
-
 showProgram :: Program -> String
 showProgram rules = "[\n" <> joinWith "\n" (map (\r -> "  " <> show r) rules) <> "\n]"
-
-main :: Effect Unit
-main = do
-  logShow $ createPlan $ normalForm jam
-  log $ toText $ planToGraph $ createPlan $ normalForm jam
-  writeTextFile UTF8 "plan.dot" (toText $ planToGraph $ createPlan $ normalForm jam)

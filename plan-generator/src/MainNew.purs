@@ -2,9 +2,11 @@ module MainNew where
 
 import Prelude
 
+import Backends.Dot (planToGraph)
 import Data.Array (catMaybes, concat, filter, fromFoldable, groupAllBy)
 import Data.Array as Array
 import Data.Array.NonEmpty (head, toArray)
+import Data.DotLang.Class (toText)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -12,7 +14,7 @@ import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
 import Data.Tuple (Tuple(..), fst, snd)
-import DatalogMTL (Formula(..), Interval(..), Predicate(..), Rule(..), Term(..), Program, normalForm)
+import DatalogMTL (Aggregation(..), Formula(..), Interval(..), Predicate(..), Program, Rule(..), Term(..), normalForm)
 import Effect (Effect)
 import Effect.Class.Console (log)
 import Effect.Console (logShow)
@@ -75,6 +77,7 @@ getTermsWithWindows program = concat $ map getTermsWithWindowsRule program
 
 getTermsWithWindowsRule :: Rule -> Array (Tuple Predicate (Tuple Int Int))
 getTermsWithWindowsRule (Rule head body) = getTermsWithWindowsFormula head <> (concat $ map getTermsWithWindowsFormula body)
+getTermsWithWindowsRule (AggrRule head _ _ body) = getTermsWithWindowsFormula head <> getTermsWithWindowsFormula body
 
 getTermsWithWindowsFormula :: Formula -> Array (Tuple Predicate (Tuple Int Int))
 getTermsWithWindowsFormula (Pred predicate _) = [Tuple predicate $ Tuple 0 0]
@@ -84,27 +87,12 @@ getTermsWithWindowsFormula (DiamondPlus (Interval start end) (Pred predicate _))
 getTermsWithWindowsFormula (DiamondMinus (Interval start end) (Pred predicate _)) = [Tuple predicate $ Tuple (negate start) (negate end)]
 getTermsWithWindowsFormula _ = []
 
-speedLessThanEqual30 :: Rule
-speedLessThanEqual30 = Rule (Pred (Predicate "speed_less_than_equal_30") [ Variable "car" ]) [ Pred (Predicate "speed") [ Variable "car", Variable "speed" ], Pred (Predicate "less_than_equal") [ Variable "speed", Constant "30" ] ]
-
-speed0 :: Rule
-speed0 = Rule (Pred (Predicate "speed_less_than_equal_0") [ Variable "car" ]) [ Pred (Predicate "speed") [ Variable "car", Variable "speed" ], Pred (Predicate "less_than_equal") [ Variable "speed", Constant "0" ] ]
-
-lightjam :: Rule
-lightjam = Rule (Pred (Predicate "light_jam") [ Variable "car" ]) [ BoxMinus (Interval 0 15) (Pred (Predicate "speed_less_than_equal_30") [ Variable "car" ]) ]
-
-mediumjam :: Rule
-mediumjam = Rule (Pred (Predicate "medium_jam") [ Variable "car" ]) [ Pred (Predicate "light_jam") [ Variable "car" ], DiamondMinus (Interval 0 30) (BoxMinus (Interval 0 3) (Pred (Predicate "speed_less_than_equal_0") [ Variable "car" ])) ]
-
-heavyjam :: Rule
-heavyjam = Rule (Pred (Predicate "heavy_jam") [ Variable "car" ]) [ Pred (Predicate "light_jam") [ Variable "car" ], BoxMinus (Interval 0 30) (DiamondMinus (Interval 0 10) (BoxMinus (Interval 0 3) (Pred (Predicate "speed_less_than_equal_0") [ Variable "car" ]))) ]
-
-jam :: Program
-jam = [ speedLessThanEqual30, speed0, lightjam, mediumjam, heavyjam ]
-
 -- New use case
 stopingForRedLight :: Rule
 stopingForRedLight = Rule (Pred (Predicate "stoping_for_red_light") [Variable "car"]) [ DiamondMinus (Interval 0 5) (Pred (Predicate "speed") [ Variable "car", Constant "0" ]), Pred (Predicate "traffic_light") [ Constant "red" ] ]
+
+avgSpeed5 :: Rule
+avgSpeed5 = AggrRule (Pred (Predicate "avg_speed_5") [ Variable "var", Variable "avg_speed" ]) Average (Variable "avg_speed") (DiamondMinus (Interval 0 5) (Pred (Predicate "speed") [ Variable "car", Variable "speed" ]))
 
 trafficJam :: Rule 
 trafficJam = Rule (Pred (Predicate "traffic_jam") [Variable "car"]) [ BoxMinus (Interval 0 60) (DiamondMinus (Interval 0 5) (Pred (Predicate "speed") [ Variable "car", Constant "0" ])) ]
@@ -112,6 +100,7 @@ trafficJam = Rule (Pred (Predicate "traffic_jam") [Variable "car"]) [ BoxMinus (
 runningExample :: Program
 runningExample = [
   stopingForRedLight,
+  avgSpeed5,
   trafficJam
 ]
 
@@ -121,6 +110,10 @@ showProgram rules = "[\n" <> joinWith "\n" (map (\r -> "  " <> show r) rules) <>
 main :: Effect Unit
 main = do
   log $ showProgram runningExample
+  log ""
   log $ showProgram $ normalForm runningExample
-  logShow $ getTermsWithWindows runningExample
+  log ""
   logShow $ createPlan $ normalForm runningExample
+  log ""
+  log $ toText $ planToGraph $ createPlan $ normalForm runningExample
+  writeTextFile UTF8 "plan.dot" (toText $ planToGraph $ createPlan $ normalForm jam)

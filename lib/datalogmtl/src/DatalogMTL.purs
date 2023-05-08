@@ -2,10 +2,12 @@ module DatalogMTL where
 
 import Prelude
 
-import Data.Array (concatMap, filter, fromFoldable, length, mapMaybe, nub, (:))
+import Data.Array (concatMap, elem, filter, fromFoldable, length, mapMaybe, nub, (:))
 import Data.Array as Array
 import Data.Array.NonEmpty (toArray)
 import Data.Array.NonEmpty.Internal (NonEmptyArray(..))
+import Data.List (List(..))
+import Data.List as List
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
@@ -13,7 +15,7 @@ import Data.Set (Set)
 import Data.Set as Set
 import Data.String (joinWith)
 import Data.String.Gen (genAlphaLowercaseString)
-import Data.Tuple (Tuple(..), fst)
+import Data.Tuple (Tuple(..), fst, snd)
 import Effect (Effect)
 import Effect.Console (logShow)
 import Test.QuickCheck (class Arbitrary, arbitrary, randomSeed)
@@ -48,6 +50,12 @@ instance arbitraryPredicate :: Arbitrary Predicate where
   arbitrary = do
     name <- resize 7 genAlphaLowercaseString
     pure $ Predicate name
+
+data Aggregation = Average
+instance showAggregation :: Show Aggregation where
+  show Average = "mavg"
+derive instance eqAggregation :: Eq Aggregation
+derive instance ordAggregation :: Ord Aggregation
 
 data Formula = Pred Predicate (Array Term) | BoxPlus Interval Formula | BoxMinus Interval Formula | DiamondPlus Interval Formula | DiamondMinus Interval Formula
 instance showFormula :: Show Formula where
@@ -87,9 +95,10 @@ instance arbitraryFormula :: Arbitrary Formula where
         terms <- (resize 3 <$> arrayOf) arbitrary
         pure $ Pred pred terms
 
-data Rule = Rule Formula (Array Formula)
+data Rule = Rule Formula (Array Formula) | AggrRule Formula Aggregation Term Formula
 instance showRule :: Show Rule where
   show (Rule head body) = show head <> " ← " <> joinWith " ∧ " (show <$> body)
+  show (AggrRule head aggregation term body) = show head <> " ← " <> show term <> " = " <> show aggregation <> "(" <> show body <> ")"
 derive instance eqRule :: Eq Rule
 derive instance ordRule :: Ord Rule
 instance arbitraryRule :: Arbitrary Rule where
@@ -157,42 +166,53 @@ filterConsts = filter f
       (Variable _) -> false
       (Constant _) -> true
 
+replaceConsts :: Array Term -> Tuple (Map Term Term) (Array Term)
+replaceConsts termsA = Tuple (fst $ go (List.fromFoldable termsA) termsA) (fromFoldable $ snd $ go (List.fromFoldable termsA) termsA)
+  where
+    go :: List Term -> Array Term -> Tuple (Map Term Term) (List Term)
+    go (Cons t@(Variable _) ts) terms = Tuple (fst $ go ts terms) (Cons t $ snd $ go ts terms)
+    go (Cons c@(Constant _) ts) terms = Tuple (Map.insert (getVarName terms "x") c $ fst $ go ts terms) (Cons (getVarName terms "x") $ snd $ go ts (getVarName terms "x" : terms))
+      where
+        getVarName terms' name = if elem (Variable name) terms then getVarName terms' (name <> "x") else Variable name
+    go Nil _ = Tuple Map.empty Nil
+
 normalFormula :: Formula -> Tuple Program (Tuple Predicate (Array Term))
 normalFormula (Pred predicate terms) = Tuple [] (Tuple predicate terms)
-normalFormula formula@(BoxPlus (Interval start end) (Pred (Predicate predicate) terms)) = Tuple [ Rule (Pred newPred terms) [ formula ] ] (Tuple newPred (filterVars terms))
+normalFormula (BoxPlus (Interval start end) (Pred (Predicate predicate) terms)) = Tuple [ Rule (Pred newPred (snd $ replaceConsts terms)) [ BoxPlus (Interval start end) (Pred (Predicate predicate) (snd $ replaceConsts terms)) ] ] (Tuple newPred terms)
   where
-    newPred = Predicate ("boxPlus_" <> show start <> "_" <> show end <> "_" <> predicate <> joinWith "_" (map show (filterConsts terms)))
+    newPred = Predicate ("boxPlus_" <> show start <> "_" <> show end <> "_" <> predicate)
 normalFormula (BoxPlus (Interval start end) formula') = case normalFormula formula' of
-  Tuple prog (Tuple pred ts) -> Tuple (Rule (Pred (newPred pred) ts) [ BoxPlus (Interval start end) (Pred pred ts) ] : prog) (Tuple (newPred pred) (filterVars ts))
+  Tuple prog (Tuple pred ts) -> Tuple (Rule (Pred (newPred pred) (snd $ replaceConsts ts)) [ BoxPlus (Interval start end) (Pred pred (snd $ replaceConsts ts)) ] : prog) (Tuple (newPred pred) ts)
     where
-      newPred (Predicate predicate) = Predicate ("boxPlus_" <> show start <> "_" <> show end <> "_" <> predicate <> joinWith "_" (map show (filterConsts ts)))
-normalFormula formula@(BoxMinus (Interval start end) (Pred (Predicate predicate) terms)) = Tuple [ Rule (Pred newPred (filterVars terms)) [ formula ] ] (Tuple newPred (filterVars terms))
+      newPred (Predicate predicate) = Predicate ("boxPlus_" <> show start <> "_" <> show end <> "_" <> predicate)
+normalFormula (BoxMinus (Interval start end) (Pred (Predicate predicate) terms)) = Tuple [ Rule (Pred newPred (snd $ replaceConsts terms)) [ BoxMinus (Interval start end) (Pred (Predicate predicate) (snd $ replaceConsts terms)) ] ] (Tuple newPred terms)
   where
-    newPred = Predicate ("boxMinus_" <> show start <> "_" <> show end <> "_" <> predicate <> joinWith "_" (map show (filterConsts terms)))
+    newPred = Predicate ("boxMinus_" <> show start <> "_" <> show end <> "_" <> predicate)
 normalFormula (BoxMinus (Interval start end) formula') = case normalFormula formula' of
-  Tuple prog (Tuple pred ts) -> Tuple (Rule (Pred (newPred pred) ts) [ BoxMinus (Interval start end) (Pred pred ts) ] : prog) (Tuple (newPred pred) (filterVars ts))
+  Tuple prog (Tuple pred ts) -> Tuple (Rule (Pred (newPred pred) (snd $ replaceConsts ts)) [ BoxMinus (Interval start end) (Pred pred (snd $ replaceConsts ts)) ] : prog) (Tuple (newPred pred) ts)
     where
-      newPred (Predicate predicate) = Predicate ("boxMinus_" <> show start <> "_" <> show end <> "_" <> predicate <> joinWith "_" (map show (filterConsts ts)))
-normalFormula formula@(DiamondPlus (Interval start end) (Pred (Predicate predicate) terms)) = Tuple [ Rule (Pred newPred (filterVars terms)) [ formula ] ] (Tuple newPred (filterVars terms))
+      newPred (Predicate predicate) = Predicate ("boxMinus_" <> show start <> "_" <> show end <> "_" <> predicate)
+normalFormula (DiamondPlus (Interval start end) (Pred (Predicate predicate) terms)) = Tuple [ Rule (Pred newPred (snd $ replaceConsts terms)) [ DiamondPlus (Interval start end) (Pred (Predicate predicate) (snd $ replaceConsts terms)) ] ] (Tuple newPred terms)
   where
-    newPred = Predicate ("diamondPlus_" <> show start <> "_" <> show end <> "_" <> predicate <> joinWith "_" (map show (filterConsts terms)))
+    newPred = Predicate ("diamondPlus_" <> show start <> "_" <> show end <> "_" <> predicate <> joinWith "_" (map show terms))
 normalFormula (DiamondPlus (Interval start end) formula') = case normalFormula formula' of
-  Tuple prog (Tuple pred ts) -> Tuple (Rule (Pred (newPred pred) ts) [ DiamondPlus (Interval start end) (Pred pred ts) ] : prog) (Tuple (newPred pred) (filterVars ts))
+  Tuple prog (Tuple pred ts) -> Tuple (Rule (Pred (newPred pred) (snd $ replaceConsts ts)) [ DiamondPlus (Interval start end) (Pred pred (snd $ replaceConsts ts)) ] : prog) (Tuple (newPred pred) ts)
     where
-      newPred (Predicate predicate) = Predicate ("diamondPlus_" <> show start <> "_" <> show end <> "_" <> predicate <> joinWith "_" (map show (filterConsts ts)))
-normalFormula formula@(DiamondMinus (Interval start end) (Pred (Predicate predicate) terms)) = Tuple [ Rule (Pred newPred terms) [ formula ] ] (Tuple newPred (filterVars terms))
+      newPred (Predicate predicate) = Predicate ("diamondPlus_" <> show start <> "_" <> show end <> "_" <> predicate)
+normalFormula (DiamondMinus (Interval start end) (Pred (Predicate predicate) terms)) = Tuple [ Rule (Pred newPred (snd $ replaceConsts terms)) [ DiamondMinus (Interval start end) (Pred (Predicate predicate) (snd $ replaceConsts terms)) ] ] (Tuple newPred terms)
   where
-    newPred = Predicate ("diamondMinus_" <> show start <> "_" <> show end <> "_" <> predicate <> joinWith "_" (map show (filterConsts terms)))
+    newPred = Predicate ("diamondMinus_" <> show start <> "_" <> show end <> "_" <> predicate)
 normalFormula (DiamondMinus (Interval start end) formula') = case normalFormula formula' of
-  Tuple prog (Tuple pred ts) -> Tuple (Rule (Pred (newPred pred) ts) [ DiamondMinus (Interval start end) (Pred pred ts) ] : prog) (Tuple (newPred pred) (filterVars ts))
+  Tuple prog (Tuple pred ts) -> Tuple (Rule (Pred (newPred pred) (snd $ replaceConsts ts)) [ DiamondMinus (Interval start end) (Pred pred (snd $ replaceConsts ts)) ] : prog) (Tuple (newPred pred) ts)
     where
-      newPred (Predicate predicate) = Predicate ("diamondMinus_" <> show start <> "_" <> show end <> "_" <> predicate <> joinWith "_" (map show (filterConsts ts)))
+      newPred (Predicate predicate) = Predicate ("diamondMinus_" <> show start <> "_" <> show end <> "_" <> predicate)
 
 normalRule :: Rule -> Program
 normalRule rule@(Rule head body) = if isNormalRule body then [ rule ] else [ Rule head (map (\(Tuple _ (Tuple predicate terms)) -> Pred predicate terms) tuples) ] <> concatMap (\(Tuple program _) -> program) tuples
   where
     tuples :: Array (Tuple Program (Tuple Predicate (Array Term)))
     tuples = map normalFormula body
+normalRule rule@(AggrRule head aggregation term body) = if isNormalRule [ body, body ] then [ rule ] else [ AggrRule head aggregation term $ (\(Tuple _ (Tuple predicate terms)) -> Pred predicate terms) $ normalFormula body ]
 
 isNormalRule :: Array Formula -> Boolean
 isNormalRule body = if length body == 1 then (length (filter (\d -> d > 1) (map formulaDepth body))) == 0 else (length (filter (\d -> d > 0) (map formulaDepth body))) == 0
@@ -216,6 +236,7 @@ formulaPredicate (DiamondMinus _ formula) = formulaPredicate formula
 
 rulePredicates :: Rule -> Set Predicate
 rulePredicates (Rule head body) = Set.insert (formulaPredicate head) (Set.fromFoldable $ map formulaPredicate body)
+rulePredicates (AggrRule head _ _ body) = Set.fromFoldable [ formulaPredicate head, formulaPredicate body]
 
 programPredicates :: Program -> Set Predicate
 programPredicates program = Set.unions $ map rulePredicates program
@@ -224,8 +245,12 @@ getIntervallsForPredicates :: Program -> Map Predicate (Set Interval)
 getIntervallsForPredicates program = Map.fromFoldable $ Set.map (\p -> Tuple p (getIntervallsForPredicate p)) (programPredicates program)
   where
     getIntervallsForPredicate :: Predicate -> Set Interval
-    getIntervallsForPredicate predicate = Set.fromFoldable $ concatMap (\(Rule _ body) -> concatMap getIntervallsForPredicateFormula body <> mapMaybe getZeroIntervalForRule body) program
+    getIntervallsForPredicate predicate = Set.fromFoldable $ concatMap getIntervallsForPredicateRule program
       where
+        getIntervallsForPredicateRule :: Rule -> Array Interval
+        getIntervallsForPredicateRule (Rule _ body) = concatMap getIntervallsForPredicateFormula body <> mapMaybe getZeroIntervalForRule body
+        getIntervallsForPredicateRule (AggrRule _ _ _ body) = mapMaybe getZeroIntervalForRule [ body ]
+
         getZeroIntervalForRule :: Formula -> Maybe Interval
         getZeroIntervalForRule (Pred predicate' _) = if predicate == predicate' then Just (Interval 0 0) else Nothing
         getZeroIntervalForRule _ = Nothing
@@ -243,6 +268,7 @@ showIntervalForPredicates fiMap = joinWith "\n" $ map (\(Tuple predicate interva
 
 getPredicatesForRule :: Rule -> Array Predicate
 getPredicatesForRule (Rule head body) = getPredicateForFormula head : (getPredicateForFormula <$> body)
+getPredicatesForRule (AggrRule head _ _ body) = [ getPredicateForFormula head, getPredicateForFormula body]
 
 getPredicateForFormula :: Formula -> Predicate 
 getPredicateForFormula (Pred pred _) = pred

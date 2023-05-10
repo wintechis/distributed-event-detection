@@ -12,7 +12,7 @@ import Data.String.NonEmpty (nes)
 import Data.These (These(..))
 import Data.Time.Duration (Seconds(..))
 import Data.Traversable (sequence)
-import Options.Applicative (Parser, ParserInfo, ReadM, briefDesc, eitherReader, help, helper, info, long, many, maybeReader, metavar, option, progDesc, short, str, value, (<**>))
+import Options.Applicative (Parser, ParserInfo, ReadM, briefDesc, eitherReader, help, helper, info, long, many, maybeReader, metavar, option, progDesc, short, showDefaultWith, str, value, (<**>))
 import Parsing (runParser)
 import RDF (Term, literalType, namedNode, namedNode')
 import RDF.Prefixes (xsd)
@@ -78,10 +78,10 @@ opts = ado
   in { uri: URI http (HierarchicalPartAuth (Authority Nothing $ Just $ Both hostname port) $ Path []) Nothing Nothing, predicate, dataProviders, windows }
 
 hostname :: Parser Host
-hostname = option (maybeReader (\s -> hush $ runParser s Host.parser )) (long "hostname" <> short 'H' <> metavar "HOSTNAME" <> value (NameAddress $ RegName.fromString (nes $ (Proxy :: Proxy "localhost"))) <> help "The hostname under which the stream container shall run.")
+hostname = option (maybeReader (\s -> hush $ runParser s Host.parser )) (long "hostname" <> short 'H' <> metavar "HOSTNAME" <> showDefaultWith Host.print <> value (NameAddress $ RegName.fromString (nes $ (Proxy :: Proxy "localhost"))) <> help "The hostname under which the stream container shall run.")
 
 port :: Parser Port
-port = option (maybeReader (\s -> fromString s >>= Port.fromInt)) (long "port" <> short 'P' <> metavar "PORT" <> value (Port.unsafeFromInt 8080) <> help "The port for the stream container to listen on.")
+port = option (maybeReader (\s -> fromString s >>= Port.fromInt)) (long "port" <> short 'P' <> metavar "PORT" <> showDefaultWith Port.print <> value (Port.unsafeFromInt 8080) <> help "The port for the stream container to listen on.")
 
 predicate :: Parser (Maybe Term)
 predicate = option (Just <$> namedNode <$> str) (long "predicate" <> short 'p' <> metavar "URI" <> value Nothing <> help "Predicate that is assigned to the stream container (purely informative).")

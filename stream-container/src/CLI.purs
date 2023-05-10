@@ -12,7 +12,7 @@ import Data.String.NonEmpty (nes)
 import Data.These (These(..))
 import Data.Time.Duration (Seconds(..))
 import Data.Traversable (sequence)
-import Options.Applicative (Parser, ParserInfo, ReadM, briefDesc, eitherReader, help, helper, info, long, many, maybeReader, metavar, option, progDesc, short, showDefaultWith, str, value, (<**>))
+import Options.Applicative (Parser, ParserInfo, ReadM, briefDesc, eitherReader, help, helper, info, long, many, maybeReader, metavar, option, progDesc, short, showDefault, showDefaultWith, str, value, (<**>))
 import Parsing (runParser)
 import RDF (Term, literalType, namedNode, namedNode')
 import RDF.Prefixes (xsd)
@@ -28,10 +28,6 @@ import URI.URI (URIOptions)
 
 data Window = Window {
   membershipResource :: Term,
-  hasMemberRelation :: Term,
-  contentTimestampRelation :: Term,
-  hasPoisonRelation :: Term,
-  contentPoisonRelation :: Term,
   start :: Seconds,
   end :: Seconds
 }
@@ -60,6 +56,10 @@ type Options = {
   uri :: SCURI,
   predicate :: Maybe Term,
   dataProviders :: List DataProvider,
+  memberRelation :: Term,
+  contentTimestampRelation :: Term,
+  poisonRelation :: Term,
+  contentPoisonRelation :: Term,
   windows :: List Window
 }
 
@@ -74,8 +74,12 @@ opts = ado
   port <- port
   predicate <- predicate
   dataProviders <- dataProviders
+  memberRelation <- memberRelation
+  contentTimestampRelation <- contentTimestampRelation
+  poisonRelation <- poisonRelation
+  contentPoisonRelation <- contentPoisonRelation
   windows <- windows
-  in { uri: URI http (HierarchicalPartAuth (Authority Nothing $ Just $ Both hostname port) $ Path []) Nothing Nothing, predicate, dataProviders, windows }
+  in { uri: URI http (HierarchicalPartAuth (Authority Nothing $ Just $ Both hostname port) $ Path []) Nothing Nothing, predicate, dataProviders, memberRelation, contentTimestampRelation, poisonRelation, contentPoisonRelation, windows }
 
 hostname :: Parser Host
 hostname = option (maybeReader (\s -> hush $ runParser s Host.parser )) (long "hostname" <> short 'H' <> metavar "HOSTNAME" <> showDefaultWith Host.print <> value (NameAddress $ RegName.fromString (nes $ (Proxy :: Proxy "localhost"))) <> help "The hostname under which the stream container shall run.")
@@ -87,7 +91,7 @@ predicate :: Parser (Maybe Term)
 predicate = option (Just <$> namedNode <$> str) (long "predicate" <> short 'p' <> metavar "URI" <> value Nothing <> help "Predicate that is assigned to the stream container (purely informative).")
 
 dataProviders :: Parser (List DataProvider)
-dataProviders = many $ option dataProviderReader (long "data-provider" <> short 'd' <> metavar "SUBJECT OBJECT_LIST" <> help "Subject and list of objects that the stream container should simulate.")
+dataProviders = many $ option dataProviderReader (long "data-provider" <> short 'd' <> metavar "SUBJECT_URI OBJECT_LIST" <> help "Subject and list of objects that the stream container should simulate.")
 
 dataProviderReader :: ReadM DataProvider
 dataProviderReader = eitherReader parse 
@@ -104,24 +108,32 @@ dataProviderReader = eitherReader parse
             Just _ -> map (\i -> literalType i (namedNode' xsd "integer")) objects
       Just $ DataProvider (namedNode subject) objectTerms
 
+memberRelation :: Parser Term
+memberRelation = option (namedNode <$> str) (long "member-relation" <> short 'm' <> metavar "URI" <> showDefault <> value (namedNode "http://vocab.ex.org/inWindow") <> help "The ldp:hasMemberRelation.")
+
+contentTimestampRelation :: Parser Term
+contentTimestampRelation = option (namedNode <$> str) (long "content-timestamp-relation" <> short 't' <> metavar "URI" <> showDefault <> value (namedNode "http://vocab.ex.org/hasTimestamp") <> help "The ldpsc:contentTimestampRelation.")
+
+poisonRelation :: Parser Term
+poisonRelation = option (namedNode <$> str) (long "poison-relation" <> short 'r' <> metavar "URI" <> showDefault <> value (namedNode "http://vocab.ex.org/isPoisoned") <> help "The ldpsc:hasPoisonRelation.")
+
+contentPoisonRelation :: Parser Term
+contentPoisonRelation = option (namedNode <$> str) (long "content-poison-relation" <> short 'c' <> metavar "URI" <> showDefault <> value (namedNode "http://vocab.ex.org/hasPoison") <> help "The ldpsc:contentPoisonRelation.")
+
 windows :: Parser (List Window)
-windows = many $ option windowReader (long "window" <> short 'w' <> metavar "MEMBERSHIP_RESOURCE MEMBER_RELATION CONTENT_TIMESTAMP_RELATION POISON_RELATION CONTENT_POISON_RELATION START END" <> help "A window for the Stream Container to start with.")
+windows = many $ option windowReader (long "window" <> short 'w' <> metavar "MEMBERSHIP_RESOURCE START END" <> help "A window for the Stream Container to start with.")
 
 windowReader :: ReadM Window
 windowReader = eitherReader parse
   where
     parse :: String -> Either String Window
     parse string = case split (Pattern " ") string of 
-      [ membershipResource, memberRelation, contentTimestampRelation, poisonRelation, contentPoisonRelation, startString, endString ] -> case fromString startString of
+      [ membershipResource, startString, endString ] -> case fromString startString of
         Nothing -> Left $ "Start of window \"" <> startString <> "\" is not an integer!"
         Just start -> case fromString endString of 
           Nothing -> Left $ "End of window \"" <> endString <> "\" is not an integer!"
           Just end -> Right $ Window {
             membershipResource: namedNode membershipResource,
-            hasMemberRelation: namedNode memberRelation,
-            contentTimestampRelation: namedNode contentTimestampRelation,
-            hasPoisonRelation: namedNode poisonRelation,
-            contentPoisonRelation: namedNode contentPoisonRelation,
             start: Seconds $ toNumber start,
             end: Seconds $ toNumber end
           }

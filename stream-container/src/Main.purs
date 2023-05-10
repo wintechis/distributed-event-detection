@@ -117,35 +117,39 @@ isGraphInWindow now contentTimestampRelation start end (Tuple _ graph) = fromMay
   windowEnd <- adjust end now
   pure $ timestamp <= windowStart && timestamp >= windowEnd
 
-membershipQuads :: DateTime -> Array (Tuple Int Graph) -> Window -> Array Quad
-membershipQuads now graphArray (Window window) = map (\(Tuple i _) -> quad window.membershipResource window.hasMemberRelation (namedNode $ "/" <> show i) defaultGraph) $ getGraphsInWindow graphArray now window.contentTimestampRelation window.start window.end
+membershipQuads :: Options -> DateTime -> Array (Tuple Int Graph) -> Window -> Array Quad
+membershipQuads opts now graphArray (Window window) = map (\(Tuple i _) -> quad window.membershipResource opts.memberRelation (namedNode $ "/" <> show i) defaultGraph) $ getGraphsInWindow graphArray now opts.contentTimestampRelation window.start window.end
 
-poisonedQuads :: DateTime -> Array (Tuple Int Graph) -> Window -> Array Quad
-poisonedQuads now graphArray (Window window) = if (Set.size $ Set.difference (allTimestampsInWindow (fromMaybe now $ adjust window.start now) (fromMaybe now $ adjust window.end now)) (Set.fromFoldable $ mapMaybe getPoisonedTimestamp inWindow)) == 0
+poisonedQuads :: Options -> DateTime -> Array (Tuple Int Graph) -> Window -> Array Quad
+poisonedQuads opts now graphArray (Window window) = if (Set.size $ Set.difference (allTimestampsInWindow (fromMaybe now $ adjust window.start now) (fromMaybe now $ adjust window.end now)) (Set.fromFoldable $ mapMaybe getPoisonedTimestamp inWindow)) == 0
   then
-    [ quad window.membershipResource window.hasPoisonRelation (literalType "true" (namedNode' xsd "boolean")) defaultGraph ]
+    [ quad window.membershipResource opts.poisonRelation (literalType "true" (namedNode' xsd "boolean")) defaultGraph ]
   else 
-    [ quad window.membershipResource window.hasPoisonRelation (literalType "false" (namedNode' xsd "boolean")) defaultGraph ]
+    [ quad window.membershipResource opts.poisonRelation (literalType "false" (namedNode' xsd "boolean")) defaultGraph ]
   where
     allTimestampsInWindow :: DateTime -> DateTime -> Set DateTime
     allTimestampsInWindow start end = if diff start end < Seconds 0.0 then Set.empty else Set.union (Set.singleton start) (allTimestampsInWindow (fromMaybe end $ adjust (negateDuration $ Seconds 1.0) start) end)
     inWindow :: Array (Tuple Int Graph)
-    inWindow = filter (isGraphInWindow now window.contentTimestampRelation window.start window.end) graphArray
+    inWindow = filter (isGraphInWindow now opts.contentTimestampRelation window.start window.end) graphArray
     getPoisonedTimestamp :: (Tuple Int Graph) -> Maybe DateTime 
-    getPoisonedTimestamp graph = case find (\q -> predicate q == window.contentPoisonRelation && object q == literalType "true" (namedNode' xsd "boolean")) (Array.fromFoldable $ snd graph) of 
+    getPoisonedTimestamp graph = case find (\q -> predicate q == opts.contentPoisonRelation && object q == literalType "true" (namedNode' xsd "boolean")) (Array.fromFoldable $ snd graph) of 
       Nothing -> Nothing
       Just _ -> do
-        q <- find (\q -> predicate q == window.contentTimestampRelation) (Array.fromFoldable $ snd graph)
+        q <- find (\q -> predicate q == opts.contentTimestampRelation) (Array.fromFoldable $ snd graph)
         hush $ runParser (value $ object q) parseDateTime
 
 streamContainerToQuads :: Options -> DateTime -> StreamContainer -> Array Quad
 streamContainerToQuads opts now (StreamContainer graphArray windowArray) = [
-  quad (namedNode "") (namedNode' rdf "type") (namedNode' ldpsc "StreamContainer") defaultGraph
+  quad (namedNode "") (namedNode' rdf "type") (namedNode' ldpsc "StreamContainer") defaultGraph,
+  quad (namedNode "") (namedNode' ldp "hasMemberRelation") opts.memberRelation defaultGraph,
+  quad (namedNode "") (namedNode' ldpsc "hasContentTimestampRelation") opts.contentTimestampRelation defaultGraph,
+  quad (namedNode "") (namedNode' ldpsc "hasPoisonRelation") opts.poisonRelation defaultGraph,
+  quad (namedNode "") (namedNode' ldpsc "hasContentPoisonRelation") opts.contentPoisonRelation defaultGraph
 ] <> predQuads <>
   map (\(Tuple i _) -> quad (namedNode "") (namedNode' ldp "contains") (namedNode $ "/" <> show i) defaultGraph) graphArray <>
   (concat $ mapWithIndex windowToQuads windowArray) <>
-  (concat $ membershipQuads now graphArray <$> windowArray) <>
-  (concat $ poisonedQuads now graphArray <$> windowArray)
+  (concat $ membershipQuads opts now graphArray <$> windowArray) <>
+  (concat $ poisonedQuads opts now graphArray <$> windowArray)
     where
       predQuads = case opts.predicate of 
         Just p -> [ quad (namedNode "") (namedNode' ldpsc "assignedPredicate") p defaultGraph ]
@@ -154,11 +158,7 @@ streamContainerToQuads opts now (StreamContainer graphArray windowArray) = [
 windowToQuads :: Int -> Window -> Array Quad
 windowToQuads i (Window window) = [
   quad (namedNode "") (namedNode' ldpsc "window") windowBN defaultGraph,
-  quad windowBN (namedNode' ldp "hasMemberRelation") window.hasMemberRelation defaultGraph,
   quad windowBN (namedNode' ldp "hasMembershipResource") window.membershipResource defaultGraph,
-  quad windowBN (namedNode' ldpsc "hasContentTimestampRelation") window.contentTimestampRelation defaultGraph,
-  quad windowBN (namedNode' ldpsc "hasPoisonRelation") window.hasPoisonRelation defaultGraph,
-  quad windowBN (namedNode' ldpsc "hasContentPoisonRelation") window.contentPoisonRelation defaultGraph,
   quad windowBN (namedNode' ldpsc "startDuration") (secondsToLiteral window.start) defaultGraph,
   quad windowBN (namedNode' ldpsc "endDuration") (secondsToLiteral window.end) defaultGraph
 ]
@@ -169,15 +169,11 @@ windowToQuads i (Window window) = [
 quadsToWindow :: Array Quad -> Maybe Window
 quadsToWindow quads = do
   membershipResource <- object <$> (head $ filter (\quad -> predicate quad == namedNode' ldp "hasMembershipResource") quads)
-  hasMemberRelation <- object <$> (head $ filter (\quad -> predicate quad == namedNode' ldp "hasMemberRelation") quads)
-  contentTimestampRelation <- object <$> (head $ filter (\quad -> predicate quad == namedNode' ldpsc "hasContentTimestampRelation") quads)
-  hasPoisonRelation <- object <$> (head $ filter (\quad -> predicate quad == namedNode' ldp "hasPoisonRelation") quads)
-  contentPoisonRelation <- object <$> (head $ filter (\quad -> predicate quad == namedNode' ldpsc "hasContentPoisonRelation") quads)
   startQuad <- head $ filter (\quad -> predicate quad == namedNode' ldpsc "start") quads
   start <- Seconds <$> (fromString $ value $ object startQuad)
   endQuad <- head $ filter (\quad -> predicate quad == namedNode' ldpsc "end") quads
   end <- Seconds <$> (fromString $ value $ object endQuad)
-  pure $ Window { membershipResource, hasMemberRelation, contentTimestampRelation, hasPoisonRelation, contentPoisonRelation, start, end }
+  pure $ Window { membershipResource, start, end }
 
 formatForMIME :: String -> Format
 formatForMIME "text/turtle" = Turtle

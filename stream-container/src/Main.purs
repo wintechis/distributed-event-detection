@@ -22,7 +22,6 @@ module Main
   , quadsToWindow
   , router
   , streamContainerToQuads
-  , timeFormatter
   , windowToQuads
   )
   where
@@ -36,12 +35,12 @@ import Data.Array as Array
 import Data.DateTime (DateTime, adjust, diff)
 import Data.Either (Either(..), hush)
 import Data.Foldable (foldl, foldr)
-import Data.Formatter.DateTime (Formatter, format)
-import Data.Formatter.DateTime as Formatter
+import Data.Formatter.DateTime (FormatterCommand(..), format, unformatParser)
 import Data.Formatter.Parser.Interval (parseDateTime)
+import Data.Int (round)
 import Data.Int as Integer
 import Data.Lens (Prism', _Just, preview, prism', set)
-import Data.List as List
+import Data.List (List(..), (:))
 import Data.Map (lookup)
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Number (fromString)
@@ -50,7 +49,8 @@ import Data.Set as Set
 import Data.String (joinWith, toUpper)
 import Data.String.CaseInsensitive (CaseInsensitiveString(..))
 import Data.These (These(..))
-import Data.Time.Duration (Seconds(..), negateDuration)
+import Data.Time.Duration (Seconds, negateDuration)
+import Data.Time.Duration as Time
 import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..), fst, snd)
 import Effect (Effect)
@@ -85,17 +85,20 @@ data StreamContainer = StreamContainer (Array (Tuple Int Graph)) (Array Window)
 emptyStreamContainer :: StreamContainer
 emptyStreamContainer = StreamContainer [] []
 
-addGraphToStreamContainer :: DateTime -> Graph -> StreamContainer -> StreamContainer
-addGraphToStreamContainer datetime newGraph (StreamContainer graphArray windowArray) = StreamContainer (snoc (dropWhile graphTooOld graphArray) (Tuple nextIdx newGraph)) windowArray
+addGraphToStreamContainer :: Options -> DateTime -> Graph -> StreamContainer -> StreamContainer
+addGraphToStreamContainer opts datetime newGraph (StreamContainer graphArray windowArray) = StreamContainer (snoc (dropWhile graphTooOld graphArray) (Tuple nextIdx newGraph)) windowArray
   where
     nextIdx :: Int
     nextIdx = fromMaybe 0 $ (add 1) <$> fst <$> last graphArray
+    largestWindow :: Seconds
+    largestWindow = fromMaybe (Time.Seconds 0.0) $ Set.findMax $ Set.map (\(Window window) -> window.end) $ Set.fromFoldable windowArray
     graphTooOld :: Tuple Int Graph -> Boolean
     graphTooOld graph = fromMaybe true do
-        quad <- Set.findMax $ Set.filter (\q -> predicate q == namedNode "http://ex.org/vocab/timestamp") $ snd graph
-        timestamp <- hush $ runParser (value $ object quad) parseDateTime
-        tenSecondsBack <- adjust (negateDuration $ Seconds 10.0) datetime
-        pure $ timestamp < tenSecondsBack
+      quad <- Set.findMax $ Set.filter (\q -> predicate q == opts.contentTimestampRelation) $ snd graph
+      timestamp <- hush $ runParser (value $ object quad) $ unformatParser (UnixTimestamp : Nil)
+      largestWindowBack <- adjust (negateDuration largestWindow) datetime
+      plusTenSecondsBack <- adjust (Time.Seconds (negate $ fromMaybe 10.0 $ fromString $ show opts.grace)) largestWindowBack
+      pure $ timestamp < plusTenSecondsBack
 
 getGraphFromStreamContainer :: Int -> StreamContainer -> Maybe (Tuple Int Graph)
 getGraphFromStreamContainer i (StreamContainer graphArray _) = find (\(Tuple i2 _) -> i == i2) graphArray
@@ -128,7 +131,7 @@ poisonedQuads opts now graphArray (Window window) = if (Set.size $ Set.differenc
     [ quad window.membershipResource opts.poisonRelation (literalType "false" (namedNode' xsd "boolean")) defaultGraph ]
   where
     allTimestampsInWindow :: DateTime -> DateTime -> Set DateTime
-    allTimestampsInWindow start end = if diff start end < Seconds 0.0 then Set.empty else Set.union (Set.singleton start) (allTimestampsInWindow (fromMaybe end $ adjust (negateDuration $ Seconds 1.0) start) end)
+    allTimestampsInWindow start end = if diff start end < Time.Seconds 0.0 then Set.empty else Set.union (Set.singleton start) (allTimestampsInWindow (fromMaybe end $ adjust (negateDuration $ Time.Seconds 1.0) start) end)
     inWindow :: Array (Tuple Int Graph)
     inWindow = filter (isGraphInWindow now opts.contentTimestampRelation window.start window.end) graphArray
     getPoisonedTimestamp :: (Tuple Int Graph) -> Maybe DateTime 
@@ -144,7 +147,8 @@ streamContainerToQuads opts now (StreamContainer graphArray windowArray) = [
   quad (namedNode "") (namedNode' ldp "hasMemberRelation") opts.memberRelation defaultGraph,
   quad (namedNode "") (namedNode' ldpsc "hasContentTimestampRelation") opts.contentTimestampRelation defaultGraph,
   quad (namedNode "") (namedNode' ldpsc "hasPoisonRelation") opts.poisonRelation defaultGraph,
-  quad (namedNode "") (namedNode' ldpsc "hasContentPoisonRelation") opts.contentPoisonRelation defaultGraph
+  quad (namedNode "") (namedNode' ldpsc "hasContentPoisonRelation") opts.contentPoisonRelation defaultGraph,
+  quad (namedNode "") (namedNode' ldpsc "currentTime") (literalType (format (UnixTimestamp : Nil) now) (namedNode' xsd "integer")) defaultGraph
 ] <> predQuads <>
   map (\(Tuple i _) -> quad (namedNode "") (namedNode' ldp "contains") (namedNode $ "/" <> show i) defaultGraph) graphArray <>
   (concat $ mapWithIndex windowToQuads windowArray) <>
@@ -164,15 +168,15 @@ windowToQuads i (Window window) = [
 ]
   where
     windowBN = blankNode $ "window-" <> show i
-    secondsToLiteral (Seconds s) = literalType (show s) (namedNode' xsd "integer")
+    secondsToLiteral (Time.Seconds s) = literalType (show $ round s) (namedNode' xsd "integer")
 
 quadsToWindow :: Array Quad -> Maybe Window
 quadsToWindow quads = do
   membershipResource <- object <$> (head $ filter (\quad -> predicate quad == namedNode' ldp "hasMembershipResource") quads)
   startQuad <- head $ filter (\quad -> predicate quad == namedNode' ldpsc "start") quads
-  start <- Seconds <$> (fromString $ value $ object startQuad)
+  start <- Time.Seconds <$> (fromString $ value $ object startQuad)
   endQuad <- head $ filter (\quad -> predicate quad == namedNode' ldpsc "end") quads
-  end <- Seconds <$> (fromString $ value $ object endQuad)
+  end <- Time.Seconds <$> (fromString $ value $ object endQuad)
   pure $ Window { membershipResource, start, end }
 
 formatForMIME :: String -> Format
@@ -227,7 +231,7 @@ router options streamContainerRef request@{ method: Post, path: [], body, header
       logResponse request $ badRequest $ "Parsing request body failed: " <> message error
     Right quads -> do
       datetime <- liftEffect nowDateTime
-      liftEffect $ modify_ (addGraphToStreamContainer datetime $ fromFoldable quads) streamContainerRef
+      liftEffect $ modify_ (addGraphToStreamContainer options datetime $ fromFoldable quads) streamContainerRef
       logResponse request created
 -- GET /all
 router options streamContainerRef request@{ method: Get, path : [ "all" ], headers: (Headers headers) } = do
@@ -267,23 +271,6 @@ router options streamContainerRef request@{ method: Post, path: [ "window" ], bo
         logResponse request created
 router _ _ request = logResponse request notFound
 
-timeFormatter :: Formatter
-timeFormatter = List.fromFoldable [
-  Formatter.YearFull,
-  Formatter.Placeholder "-",
-  Formatter.MonthTwoDigits,
-  Formatter.Placeholder "-",
-  Formatter.DayOfMonthTwoDigits,
-  Formatter.Placeholder " ",
-  Formatter.Hours24,
-  Formatter.Placeholder ":",
-  Formatter.MinutesTwoDigits,
-  Formatter.Placeholder ":",
-  Formatter.SecondsTwoDigits,
-  Formatter.Placeholder ".",
-  Formatter.MillisecondsTwoDigits
-]
-
 logResponse :: forall m. MonadAff m => Request -> m Response -> m Response
 logResponse { method, path } response = do
   { status } <- response
@@ -293,22 +280,22 @@ logResponse { method, path } response = do
 logDebug :: forall m. MonadAff m => String -> m Unit
 logDebug message = do
   time <- liftEffect $ nowDateTime
-  liftEffect $ log $ "[DEBUG]\t[" <> format timeFormatter time <> "] " <> message
+  liftEffect $ log $ "[DEBUG]\t[" <> format (UnixTimestamp : Nil) time <> "] " <> message
 
 logInfo :: forall m. MonadAff m => String -> m Unit
 logInfo message = do
   time <- liftEffect $ nowDateTime
-  liftEffect $ log $ "[INFO]\t[" <> format timeFormatter time <> "] " <> message
+  liftEffect $ log $ "[INFO]\t[" <> format (UnixTimestamp : Nil) time <> "] " <> message
 
 logWarn :: forall m. MonadAff m => String -> m Unit
 logWarn message = do
   time <- liftEffect $ nowDateTime
-  liftEffect $ log $ "[WARN]\t[" <> format timeFormatter time <> "] " <> message
+  liftEffect $ log $ "[WARN]\t[" <> format (UnixTimestamp : Nil) time <> "] " <> message
 
 logError :: forall m. MonadAff m => String -> m Unit
 logError message = do
   time <- liftEffect $ nowDateTime
-  liftEffect $ log $ "[ERROR]\t[" <> format timeFormatter time <> "] " <> message
+  liftEffect $ log $ "[ERROR]\t[" <> format (UnixTimestamp : Nil) time <> "] " <> message
 
 _That :: forall a b. Prism' (These a b) b
 _That = prism' That case _ of 
@@ -316,14 +303,14 @@ _That = prism' That case _ of
   That a -> Just a
   Both _ a -> Just a
 
-setupProvideData :: Ref StreamContainer -> Term -> DataProvider -> Effect Unit
-setupProvideData scRef predicate dataProvider = do
+setupProvideData :: Options -> Ref StreamContainer -> Term -> DataProvider -> Effect Unit
+setupProvideData opts scRef predicate dataProvider = do
   iRef <- new 0
-  _ <- setInterval 1000 $ provideData iRef scRef predicate dataProvider
+  _ <- setInterval 1000 $ provideData opts iRef scRef predicate dataProvider
   pure unit
 
-provideData :: Ref Int -> Ref StreamContainer -> Term -> DataProvider -> Effect Unit
-provideData iRef scRef predicate (DataProvider subject objects) = do
+provideData :: Options -> Ref Int -> Ref StreamContainer -> Term -> DataProvider -> Effect Unit
+provideData opts iRef scRef predicate (DataProvider subject objects) = do
   i <- read iRef
   now <- nowDateTime
   object <- case objects !! i of 
@@ -334,19 +321,20 @@ provideData iRef scRef predicate (DataProvider subject objects) = do
       Ref.write (i + 1) iRef
       pure object
   let graph = Set.fromFoldable [
-    quad subject predicate object defaultGraph
+    quad subject predicate object defaultGraph,
+    quad (namedNode "") opts.contentTimestampRelation (literalType (format (UnixTimestamp : Nil) now) $ namedNode' xsd "integer") defaultGraph
   ]
   launchAff_ $ logDebug $ "Inserted '" <> show (quad subject predicate object defaultGraph)
-  modify_ (addGraphToStreamContainer now graph) scRef
+  modify_ (addGraphToStreamContainer opts now graph) scRef
 
 main :: ServerM
 main = do
   streamContainerRef <- new $ emptyStreamContainer
   opts <- execParser optsInfo
-  _ <- sequence $ map (setupProvideData streamContainerRef $ fromMaybe (namedNode "error") opts.predicate) opts.dataProviders
+  _ <- sequence $ map (setupProvideData opts streamContainerRef $ fromMaybe (namedNode "error") opts.predicate) opts.dataProviders
   _ <- modify_ (\sc -> foldr addWindowToStreamContainer sc opts.windows) streamContainerRef
   time <- nowDateTime
-  serve (port opts) (router opts streamContainerRef) $ log $ "[INFO]\t[" <> format timeFormatter time <> "] Server up at " <> URI.print uriOptions opts.uri
+  serve (port opts) (router opts streamContainerRef) $ log $ "[INFO]\t[" <> format (UnixTimestamp : Nil) time <> "] Server up at " <> URI.print uriOptions opts.uri
     where
       port :: Options -> Int
       port opts = fromMaybe 8080 $ toInt <$> preview (_hierPart <<< _authority <<< _hosts <<< _Just <<< _That) opts.uri

@@ -132,14 +132,18 @@ poisonedQuads now graphArray (Window window) = if (Set.size $ Set.difference (al
         q <- find (\q -> predicate q == window.contentTimestampRelation) (Array.fromFoldable $ snd graph)
         hush $ runParser (value $ object q) parseDateTime
 
-streamContainerToQuads :: DateTime -> StreamContainer -> Array Quad
-streamContainerToQuads now (StreamContainer graphArray windowArray) = [
+streamContainerToQuads :: Options -> DateTime -> StreamContainer -> Array Quad
+streamContainerToQuads opts now (StreamContainer graphArray windowArray) = [
   quad (namedNode "") (namedNode' rdf "type") (namedNode' ldpsc "StreamContainer") defaultGraph
-] <>
+] <> predQuads <>
   map (\(Tuple i _) -> quad (namedNode "") (namedNode' ldp "contains") (namedNode $ "/" <> show i) defaultGraph) graphArray <>
   (concat $ mapWithIndex windowToQuads windowArray) <>
   (concat $ membershipQuads now graphArray <$> windowArray) <>
   (concat $ poisonedQuads now graphArray <$> windowArray)
+    where
+      predQuads = case opts.predicate of 
+        Just p -> [ quad (namedNode "") (namedNode' ldpsc "assignedPredicate") p defaultGraph ]
+        Nothing -> []
 
 windowToQuads :: Int -> Window -> Array Quad
 windowToQuads i (Window window) = [
@@ -203,7 +207,7 @@ router options streamContainerRef request@{ method: Get, path: [], headers: (Hea
     createSCPayload streamContainer time = do
       -- serialize Triples for SC
       let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-      payload <- try $ write (URI.print uriOptions options.uri) format $ streamContainerToQuads time streamContainer
+      payload <- try $ write (URI.print uriOptions options.uri) format $ streamContainerToQuads options time streamContainer
       case payload of 
         Left error -> do
           logError $ "Serializing triples for Stream Container failed: " <> message error

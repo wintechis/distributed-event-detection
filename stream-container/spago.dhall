@@ -23,6 +23,7 @@ to generate this file without the comments in this block.
   , "formatters"
   , "httpure"
   , "integers"
+  , "js-timers"
   , "lists"
   , "maybe"
   , "n3"

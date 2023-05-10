@@ -1,5 +1,6 @@
 module Main
   ( StreamContainer(..)
+  , _That
   , addGraphToStreamContainer
   , addWindowToStreamContainer
   , emptyStreamContainer
@@ -28,9 +29,9 @@ module Main
 
 import Prelude
 
-import CLI (Window(..), Options, optsInfo, uriOptions)
+import CLI (DataProvider(..), Options, Window(..), optsInfo, uriOptions)
 import Control.Monad.Error.Class (try)
-import Data.Array (concat, dropWhile, filter, find, head, last, length, mapMaybe, mapWithIndex, snoc)
+import Data.Array (concat, dropWhile, filter, find, head, last, length, mapMaybe, mapWithIndex, snoc, (!!))
 import Data.Array as Array
 import Data.DateTime (DateTime, adjust, diff)
 import Data.Either (Either(..), hush)
@@ -50,13 +51,18 @@ import Data.String (joinWith, toUpper)
 import Data.String.CaseInsensitive (CaseInsensitiveString(..))
 import Data.These (These(..))
 import Data.Time.Duration (Seconds(..), negateDuration)
+import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..), fst, snd)
+import Effect (Effect)
+import Effect.Aff (launchAff_)
 import Effect.Aff.Class (class MonadAff)
 import Effect.Class (liftEffect)
 import Effect.Console (log)
 import Effect.Exception (message)
 import Effect.Now (nowDateTime)
 import Effect.Ref (Ref, modify_, new, read)
+import Effect.Ref as Ref
+import Effect.Timer (setInterval)
 import HTTPure (Method(..), Request, Response, ResponseM, ServerM, badRequest, created, header, internalServerError, notFound, ok', serve, toString, (!@))
 import HTTPure.Headers (Headers(..))
 import N3 (Format(..), parse, write)
@@ -314,12 +320,36 @@ _That = prism' That case _ of
   That a -> Just a
   Both _ a -> Just a
 
+setupProvideData :: Ref StreamContainer -> Term -> DataProvider -> Effect Unit
+setupProvideData scRef predicate dataProvider = do
+  iRef <- new 0
+  _ <- setInterval 1000 $ provideData iRef scRef predicate dataProvider
+  pure unit
+
+provideData :: Ref Int -> Ref StreamContainer -> Term -> DataProvider -> Effect Unit
+provideData iRef scRef predicate (DataProvider subject objects) = do
+  i <- read iRef
+  now <- nowDateTime
+  object <- case objects !! i of 
+    Nothing -> do
+      Ref.write 1 iRef
+      pure $ fromMaybe (namedNode "error") $ head objects
+    Just object -> do
+      Ref.write (i + 1) iRef
+      pure object
+  let graph = Set.fromFoldable [
+    quad subject predicate object defaultGraph
+  ]
+  launchAff_ $ logDebug $ "Inserted '" <> show (quad subject predicate object defaultGraph)
+  modify_ (addGraphToStreamContainer now graph) scRef
+
 main :: ServerM
 main = do
   streamContainerRef <- new $ emptyStreamContainer
-  opts <-liftEffect $ execParser optsInfo
-  _ <- liftEffect $ modify_ (\sc -> foldr addWindowToStreamContainer sc opts.windows) streamContainerRef
-  time <- liftEffect $ nowDateTime
+  opts <- execParser optsInfo
+  _ <- sequence $ map (setupProvideData streamContainerRef $ fromMaybe (namedNode "error") opts.predicate) opts.dataProviders
+  _ <- modify_ (\sc -> foldr addWindowToStreamContainer sc opts.windows) streamContainerRef
+  time <- nowDateTime
   serve (port opts) (router opts streamContainerRef) $ log $ "[INFO]\t[" <> format timeFormatter time <> "] Server up at " <> URI.print uriOptions opts.uri
     where
       port :: Options -> Int

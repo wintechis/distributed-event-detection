@@ -32,11 +32,14 @@ to generate this file without the comments in this block.
   , "ordered-collections"
   , "parsing"
   , "prelude"
+  , "profunctor-lenses"
   , "rdf"
   , "refs"
   , "strings"
+  , "these"
   , "transformers"
   , "tuples"
+  , "uri"
   ]
 , packages = ../packages.dhall
 , sources = [ "src/**/*.purs", "test/**/*.purs" ]

@@ -28,7 +28,7 @@ module Main
 
 import Prelude
 
-import CLI (Window(..), optsInfo)
+import CLI (Window(..), Options, optsInfo, uriOptions)
 import Control.Monad.Error.Class (try)
 import Data.Array (concat, dropWhile, filter, find, head, last, length, mapMaybe, mapWithIndex, snoc)
 import Data.Array as Array
@@ -39,6 +39,7 @@ import Data.Formatter.DateTime (Formatter, format)
 import Data.Formatter.DateTime as Formatter
 import Data.Formatter.Parser.Interval (parseDateTime)
 import Data.Int as Integer
+import Data.Lens (Prism', _Just, preview, prism', set)
 import Data.List as List
 import Data.Map (lookup)
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -47,6 +48,7 @@ import Data.Set (Set, empty, fromFoldable, union)
 import Data.Set as Set
 import Data.String (joinWith, toUpper)
 import Data.String.CaseInsensitive (CaseInsensitiveString(..))
+import Data.These (These(..))
 import Data.Time.Duration (Seconds(..), negateDuration)
 import Data.Tuple (Tuple(..), fst, snd)
 import Effect.Aff.Class (class MonadAff)
@@ -62,6 +64,11 @@ import Options.Applicative (execParser)
 import Parsing (parseErrorMessage, runParser)
 import RDF (Graph, Quad, Term, blankNode, defaultGraph, literalType, namedNode, namedNode', object, predicate, quad, value)
 import RDF.Prefixes (Prefix(..), ldp, rdf, xsd)
+import URI (Path(..))
+import URI.Path.Segment (segmentFromString)
+import URI.Port (toInt)
+import URI.URI (_authority, _hierPart, _hosts, _path)
+import URI.URI as URI
 
 -- RDF Prefix for Stream Containers
 ldpsc :: Prefix
@@ -178,9 +185,9 @@ mimeForFormat NQuads = "application/n-quads"
 getUnionGraph :: StreamContainer -> Graph
 getUnionGraph (StreamContainer graphs _) = foldl union empty $ snd <$> graphs
 
-router :: Int -> Ref StreamContainer -> Request -> ResponseM
+router :: Options -> Ref StreamContainer -> Request -> ResponseM
 -- GET /
-router port streamContainerRef request@{ method: Get, path: [], headers: (Headers headers) } = do
+router options streamContainerRef request@{ method: Get, path: [], headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   case lookup (CaseInsensitiveString "Accept-Datetime") headers of
     -- No Accept-Datetime header in the request, use now
@@ -196,18 +203,18 @@ router port streamContainerRef request@{ method: Get, path: [], headers: (Header
     createSCPayload streamContainer time = do
       -- serialize Triples for SC
       let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-      payload <- try $ write ("http://127.0.0.1:" <> show port <> "/") format $ streamContainerToQuads time streamContainer
+      payload <- try $ write (URI.print uriOptions options.uri) format $ streamContainerToQuads time streamContainer
       case payload of 
         Left error -> do
           logError $ "Serializing triples for Stream Container failed: " <> message error
           logResponse request $ internalServerError $ "Serializing Turtle for Stream Container failed: " <> message error
         Right body -> logResponse request $ ok' (header "Content-Type" $ mimeForFormat format) body
 -- POST /
-router port streamContainerRef request@{ method: Post, path: [], body, headers: (Headers headers) } = do
+router options streamContainerRef request@{ method: Post, path: [], body, headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   bodyString <- toString body
   let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-  payload <- try $ parse ("http://127.0.0.1:" <> show port <> "/" <> show (nextGraphId streamContainer)) format bodyString
+  payload <- try $ parse (URI.print uriOptions $ set (_hierPart <<< _path) (Path [ segmentFromString $ show $ nextGraphId streamContainer ]) options.uri) format bodyString
   case payload of 
     Left error -> do
       logError $ "Parsing request body failed: " <> message error
@@ -217,30 +224,30 @@ router port streamContainerRef request@{ method: Post, path: [], body, headers: 
       liftEffect $ modify_ (addGraphToStreamContainer datetime $ fromFoldable quads) streamContainerRef
       logResponse request created
 -- GET /all
-router port streamContainerRef request@{ method: Get, path : [ "all" ], headers: (Headers headers) } = do
+router options streamContainerRef request@{ method: Get, path : [ "all" ], headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   let graph = getUnionGraph streamContainer
   let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-  payload <- write ("http://127.0.0.1:" <> show port <> "/") format $ Array.fromFoldable graph
+  payload <- write (URI.print uriOptions options.uri) format $ Array.fromFoldable graph
   logResponse request $ ok' (header "Content-Type" $ mimeForFormat format) payload
 -- GET /{id}
-router port streamContainerRef request@{ method: Get, path, headers: (Headers headers) } | length path == 1 = (liftEffect $ read streamContainerRef) >>= \streamContainer -> case Integer.fromString (path !@ 0) of 
+router options streamContainerRef request@{ method: Get, path, headers: (Headers headers) } | length path == 1 = (liftEffect $ read streamContainerRef) >>= \streamContainer -> case Integer.fromString (path !@ 0) of 
   Nothing -> logResponse request notFound
   Just i -> case getGraphFromStreamContainer i streamContainer of 
     Nothing -> logResponse request notFound
     Just graph -> do
       let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-      payload <- try $ write ("http://127.0.0.1:" <> show port <> "/" <> show i) format $ Array.fromFoldable $ snd graph
+      payload <- try $ write (URI.print uriOptions $ set (_hierPart <<< _path) (Path [ segmentFromString $ show i ]) options.uri) format $ Array.fromFoldable $ snd graph
       case payload of 
         Left error -> do
           logError $ "Serializing triples for contained resource failed: " <> message error
           logResponse request $ internalServerError $ "Serializing triples for contained resource failed: " <> message error
         Right rdf -> logResponse request $ ok' (header "Content-Type" $ mimeForFormat format) rdf
 -- POST /window
-router port streamContainerRef request@{ method: Post, path: [ "window" ], body, headers: (Headers headers) } = do
+router options streamContainerRef request@{ method: Post, path: [ "window" ], body, headers: (Headers headers) } = do
   bodyString <- toString body
   let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
-  payload <- try $ parse ("http://127.0.0.1:" <> show port <> "/") format bodyString
+  payload <- try $ parse (URI.print uriOptions options.uri) format bodyString
   case payload of
     Left error -> do
       logError $ "Parsing request body failed: " <> message error
@@ -297,10 +304,19 @@ logError message = do
   time <- liftEffect $ nowDateTime
   liftEffect $ log $ "[ERROR]\t[" <> format timeFormatter time <> "] " <> message
 
+_That :: forall a b. Prism' (These a b) b
+_That = prism' That case _ of 
+  This _ -> Nothing
+  That a -> Just a
+  Both _ a -> Just a
+
 main :: ServerM
 main = do
   streamContainerRef <- new $ emptyStreamContainer
   opts <-liftEffect $ execParser optsInfo
   _ <- liftEffect $ modify_ (\sc -> foldr addWindowToStreamContainer sc opts.windows) streamContainerRef
   time <- liftEffect $ nowDateTime
-  serve opts.port (router opts.port streamContainerRef) $ log $ "[INFO]\t[" <> format timeFormatter time <> "] Server up on port " <> show opts.port
+  serve (port opts) (router opts streamContainerRef) $ log $ "[INFO]\t[" <> format timeFormatter time <> "] Server up at " <> URI.print uriOptions opts.uri
+    where
+      port :: Options -> Int
+      port opts = fromMaybe 8080 $ toInt <$> preview (_hierPart <<< _authority <<< _hosts <<< _Just <<< _That) opts.uri

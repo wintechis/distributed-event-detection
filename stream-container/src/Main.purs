@@ -36,7 +36,6 @@ import Data.DateTime (DateTime, adjust, diff)
 import Data.Either (Either(..), hush)
 import Data.Foldable (foldl, foldr)
 import Data.Formatter.DateTime (FormatterCommand(..), format, unformatParser)
-import Data.Formatter.Parser.Interval (parseDateTime)
 import Data.Int (round)
 import Data.Int as Integer
 import Data.Lens (Prism', _Just, preview, prism', set)
@@ -115,9 +114,9 @@ getGraphsInWindow graphArray now contentTimestampRelation start end = filter (\g
 isGraphInWindow :: DateTime -> Term -> Seconds -> Seconds -> Tuple Int Graph -> Boolean
 isGraphInWindow now contentTimestampRelation start end (Tuple _ graph) = fromMaybe false do 
   quad <- Set.findMax $ Set.filter (\q -> predicate q == contentTimestampRelation) graph
-  timestamp <- hush $ runParser (value $ object quad) parseDateTime
-  windowStart <- adjust start now
-  windowEnd <- adjust end now
+  timestamp <- hush $ runParser (value $ object quad) $ unformatParser (UnixTimestamp : Nil)
+  windowStart <- adjust (negateDuration start) now
+  windowEnd <- adjust (negateDuration end) now
   pure $ timestamp <= windowStart && timestamp >= windowEnd
 
 membershipQuads :: Options -> DateTime -> Array (Tuple Int Graph) -> Window -> Array Quad
@@ -139,7 +138,7 @@ poisonedQuads opts now graphArray (Window window) = if (Set.size $ Set.differenc
       Nothing -> Nothing
       Just _ -> do
         q <- find (\q -> predicate q == opts.contentTimestampRelation) (Array.fromFoldable $ snd graph)
-        hush $ runParser (value $ object q) parseDateTime
+        hush $ runParser (value $ object q) $ unformatParser (UnixTimestamp : Nil)
 
 streamContainerToQuads :: Options -> DateTime -> StreamContainer -> Array Quad
 streamContainerToQuads opts now (StreamContainer graphArray windowArray) = [
@@ -204,7 +203,7 @@ router options streamContainerRef request@{ method: Get, path: [], headers: (Hea
     Nothing -> do
       time <- liftEffect nowDateTime
       createSCPayload streamContainer time
-    Just timeString -> case runParser timeString parseDateTime of
+    Just timeString -> case runParser timeString $ unformatParser (UnixTimestamp : Nil) of
         Left error -> do
           logWarn $ "Not able to parse Accept-Datetime of request: " <> parseErrorMessage error
           logResponse request $ badRequest $ "Not able to parse Accept-Datetime of request: " <> parseErrorMessage error

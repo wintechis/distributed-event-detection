@@ -3,7 +3,7 @@ module Backends.DockerCompose where
 import Prelude
 
 import Backends.Dot (runningExample)
-import Data.Array (fold, fromFoldable, mapWithIndex)
+import Data.Array (concat, fold, fromFoldable, mapWithIndex)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (fromMaybe)
@@ -21,7 +21,7 @@ import Node.FS.Sync (writeTextFile)
 
 data Compose = Compose (Array Service) (Array Network) (Array Volume) (Array Config) (Array Secret)
 
-data Service = Service String { image :: Image, command :: String, ports :: Map Int Int}
+data Service = Service String { image :: Image, command :: Array String, ports :: Map Int Int}
 
 data Image = StreamContainer | ReasoningAgent
 instance showImage :: Show Image where
@@ -40,10 +40,20 @@ planToCompose :: Plan -> Compose
 planToCompose (Plan rNodes sNodes wToS) = Compose (mapWithIndex (streamNodeToService wToS) sNodes <> mapWithIndex reasoningNodeToService rNodes) [] [] [] []
 
 streamNodeToService :: Map StreamNode (Set Window) -> Int -> StreamNode -> Service
-streamNodeToService wToS i sNode@(StreamNode pred _) = Service (show pred) { image: StreamContainer, ports: Map.singleton (9000 + i) 8080, command: "node index.js -p 8080 " <> joinWith " " (map (\(Window _ start end) -> "-w \"http://vocab.ex.org/inWindow http://" <> show pred <>":8080/#window" <> show start <> "_" <> show end <> " http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill " <> show start <> " " <> show end <> "\"") $ fromFoldable $ fromMaybe Set.empty $ Map.lookup sNode wToS) }
+streamNodeToService wToS i sNode@(StreamNode pred _) = Service (show pred) { image: StreamContainer, ports: Map.singleton (9000 + i) 8080, command: ["node", "index.js", "-p", "8080"] <>
+  (concat (map (\(Window _ start end) -> [
+    "-w",
+    "http://vocab.ex.org/inWindow http://" <> show pred <>":8080/#window" <> show start <> "_" <> show end <> " http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill " <> show start <> " " <> show end 
+  ]) $ fromFoldable $ fromMaybe Set.empty $ Map.lookup sNode wToS)) }
 
 reasoningNodeToService :: Int -> ReasoningNode -> Service
-reasoningNodeToService i (ReasoningNode reasoningType windows (StreamNode pred terms)) = Service ("rn" <> show i) { image: ReasoningAgent, ports: Map.empty, command: "node index.js " <> rType reasoningType <> " -g \"" <> "http://" <> show pred <> ":8080 " <> show pred <> " " <> joinWith " " (map show $ terms) <> "\" " <> joinWith " " (map (\(Window (StreamNode wPred wTerms) start end) -> "-s \"http://" <> show wPred <> ":8080/#window" <> show start <> "_" <> show end <> " " <> show wPred <> " " <> joinWith " " (map show $ wTerms) <> "\"") windows) }
+reasoningNodeToService i (ReasoningNode reasoningType windows (StreamNode pred terms)) = Service ("rn" <> show i) { image: ReasoningAgent, ports: Map.empty, command: [
+  "node",
+  "index.js",
+  rType reasoningType,
+  "-g",
+  "http://" <> show pred <> ":8080 " <> show pred <> " " <> joinWith " " (map show $ terms)
+] <> concat(map (\(Window (StreamNode wPred wTerms) start end) -> ["-s", "http://" <> show wPred <> ":8080/#window" <> show start <> "_" <> show end <> " " <> show wPred <> " " <> joinWith " " (map show $ wTerms) ]) windows) }
   where
     rType And = "AND"
     rType Box = "BOX"
@@ -56,7 +66,7 @@ composeToDoc (Compose services _ _ _ _) = text "services:" <> break <> (indent $
 serviceToDoc :: Service -> Doc Void
 serviceToDoc (Service name config) = text name <> text ":" <> break <> (indent $ foldWithSeparator break [
   text "image: " <> text (show config.image),
-  text "command: " <> text config.command,
+  text "command: [" <> foldWithSeparator (text ", ") (map (\c -> text "\"" <> text c <> text "\"") config.command) <> text "]",
   if Map.size config.ports > 0 then text "ports:" <> break <> (indent $ fold $ map (\(Tuple p1 p2) -> text "- " <> text (show p1) <> text ":" <> text (show p2)) $ Map.toUnfoldable config.ports) else text ""
 ])
 

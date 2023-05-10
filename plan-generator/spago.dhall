@@ -15,7 +15,6 @@ to generate this file without the comments in this block.
   [ "arrays"
   , "console"
   , "datalogmtl"
-  , "debug"
   , "dodo-printer"
   , "dotlang"
   , "effect"

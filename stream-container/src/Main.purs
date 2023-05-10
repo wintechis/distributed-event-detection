@@ -131,7 +131,7 @@ poisonedQuads opts now graphArray (Window window) = if (Set.size $ Set.differenc
     [ quad window.membershipResource opts.poisonRelation (literalType "false" (namedNode' xsd "boolean")) defaultGraph ]
   where
     allTimestampsInWindow :: DateTime -> DateTime -> Set DateTime
-    allTimestampsInWindow start end = if diff start end < Time.Seconds 0.0 then Set.empty else Set.union (Set.singleton start) (allTimestampsInWindow (fromMaybe end $ adjust (negateDuration $ Time.Seconds 1.0) start) end)
+    allTimestampsInWindow start end = if diff end start < Time.Seconds 0.0 then Set.empty else Set.union (Set.singleton end) (allTimestampsInWindow (fromMaybe start $ adjust (negateDuration $ Time.Seconds 1.0) end) start)
     inWindow :: Array (Tuple Int Graph)
     inWindow = filter (isGraphInWindow now opts.contentTimestampRelation window.start window.end) graphArray
     getPoisonedTimestamp :: (Tuple Int Graph) -> Maybe DateTime 

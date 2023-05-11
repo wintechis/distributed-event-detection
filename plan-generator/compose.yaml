@@ -16,7 +16,7 @@ services:
       - 9002:8080
   speed:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "http://vocab.ex.org/speed", "-w", "#window0_5 0 5", "-d", "http://cars.ex.org/car1 [10,12,14,16,18,20,20,20,15]"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/speed", "-w", "#window0_5 0 5", "-d", "http://cars.ex.org/car1 [10,12,14,16,18,20,20,20,15]", "-d", "http://cars.ex.org/car2 [15,15,15,15,18,18,18,18,18,18]"]
     ports:
       - 9003:8080
   stoping_for_red_light:

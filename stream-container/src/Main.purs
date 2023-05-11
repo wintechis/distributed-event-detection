@@ -30,7 +30,7 @@ import Prelude
 
 import CLI (DataProvider(..), Options, Window(..), optsInfo, uriOptions)
 import Control.Monad.Error.Class (try)
-import Data.Array (concat, dropWhile, filter, find, head, last, length, mapMaybe, mapWithIndex, snoc, (!!))
+import Data.Array (concat, dropWhile, filter, find, fold, head, init, last, length, mapMaybe, mapWithIndex, snoc, (!!))
 import Data.Array as Array
 import Data.DateTime (DateTime, adjust, diff, modifyTime, setMillisecond)
 import Data.Either (Either(..), hush)
@@ -303,35 +303,45 @@ _That = prism' That case _ of
   That a -> Just a
   Both _ a -> Just a
 
-setupProvideData :: Options -> Ref StreamContainer -> Term -> DataProvider -> Effect Unit
-setupProvideData opts scRef predicate dataProvider = do
-  iRef <- new 0
-  _ <- setInterval 1000 $ provideData opts iRef scRef predicate dataProvider
+setupProvideData :: Options -> Ref StreamContainer -> Term -> Array DataProvider -> Effect Unit
+setupProvideData opts scRef predicate dataProviders = do
+  iRefsDataProviders <- sequence $ map iRefForDataProvider dataProviders
+  _ <- setInterval 1000 $ provideData opts scRef predicate iRefsDataProviders
   pure unit
+    where
+      iRefForDataProvider :: DataProvider -> Effect (Tuple (Ref Int) DataProvider)
+      iRefForDataProvider dp = do
+        iRef <- new 0
+        pure $ Tuple iRef dp
 
-provideData :: Options -> Ref Int -> Ref StreamContainer -> Term -> DataProvider -> Effect Unit
-provideData opts iRef scRef predicate (DataProvider subject objects) = do
-  i <- read iRef
-  now <- nowDateTime
-  object <- case objects !! i of 
-    Nothing -> do
-      Ref.write 1 iRef
-      pure $ fromMaybe (namedNode "error") $ head objects
-    Just object -> do
-      Ref.write (i + 1) iRef
-      pure object
-  let graph = Set.fromFoldable [
-    quad subject predicate object defaultGraph,
-    quad (namedNode "") opts.contentTimestampRelation (literalType (format (UnixTimestamp : Nil) now) $ namedNode' xsd "integer") defaultGraph
-  ]
-  launchAff_ $ logDebug $ "Inserted '" <> show (quad subject predicate object defaultGraph)
-  modify_ (addGraphToStreamContainer opts now graph) scRef
+provideData :: Options -> Ref StreamContainer -> Term -> Array (Tuple (Ref Int) DataProvider) -> Effect Unit
+provideData opts scRef predicate dataProviders = do
+  fold <$> (sequence $ map (provideOneData false) $ fromMaybe [] $ init dataProviders)
+  fromMaybe (pure unit) $ provideOneData true <$> last dataProviders
+    where
+      provideOneData :: Boolean -> Tuple (Ref Int) DataProvider -> Effect Unit
+      provideOneData poison (Tuple iRef (DataProvider subject objects)) = do
+        i <- read iRef
+        now <- nowDateTime
+        object <- case objects !! i of 
+          Nothing -> do
+            Ref.write 1 iRef
+            pure $ fromMaybe (namedNode "error") $ head objects
+          Just object -> do
+            Ref.write (i + 1) iRef
+            pure object
+        let graph = Set.fromFoldable ([
+          quad subject predicate object defaultGraph,
+          quad (namedNode "") opts.contentTimestampRelation (literalType (format (UnixTimestamp : Nil) now) $ namedNode' xsd "integer") defaultGraph
+        ] <> if poison then [ quad (namedNode "") opts.contentPoisonRelation (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] else [])
+        launchAff_ $ logDebug $ "Inserted '" <> show (quad subject predicate object defaultGraph)
+        modify_ (addGraphToStreamContainer opts now graph) scRef
 
 main :: ServerM
 main = do
   streamContainerRef <- new $ emptyStreamContainer
   opts <- execParser optsInfo
-  _ <- sequence $ map (setupProvideData opts streamContainerRef $ fromMaybe (namedNode "error") opts.predicate) opts.dataProviders
+  _ <- setupProvideData opts streamContainerRef (fromMaybe (namedNode "error") opts.predicate) $ Array.fromFoldable opts.dataProviders
   _ <- modify_ (\sc -> foldr addWindowToStreamContainer sc opts.windows) streamContainerRef
   time <- nowDateTime
   serve (port opts) (router opts streamContainerRef) $ log $ "[INFO]\t[" <> format (UnixTimestamp : Nil) time <> "] Server up at " <> URI.print uriOptions opts.uri

@@ -108,6 +108,18 @@ main = do
       literalType "20" (namedNode' xsd "integer"),
       literalType "20" (namedNode' xsd "integer"),
       literalType "15" (namedNode' xsd "integer")
+    ],
+    Input (namedNode "http://cars.ex.org/car2") (Predicate "speed") [
+      literalType "15" (namedNode' xsd "integer"),
+      literalType "15" (namedNode' xsd "integer"),
+      literalType "15" (namedNode' xsd "integer"),
+      literalType "15" (namedNode' xsd "integer"),
+      literalType "18" (namedNode' xsd "integer"),
+      literalType "18" (namedNode' xsd "integer"),
+      literalType "18" (namedNode' xsd "integer"),
+      literalType "18" (namedNode' xsd "integer"),
+      literalType "18" (namedNode' xsd "integer"),
+      literalType "18" (namedNode' xsd "integer")
     ]
   ] }
   log $ print plainText twoSpaces $ composeToDoc $ planToCompose parameters $ createPlan $ normalForm runningExample

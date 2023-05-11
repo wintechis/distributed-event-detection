@@ -40,11 +40,13 @@ planToCompose :: Plan -> Compose
 planToCompose (Plan rNodes sNodes wToS) = Compose (mapWithIndex (streamNodeToService wToS) sNodes <> mapWithIndex reasoningNodeToService rNodes) [] [] [] []
 
 streamNodeToService :: Map StreamNode (Set Window) -> Int -> StreamNode -> Service
-streamNodeToService wToS i sNode@(StreamNode pred _) = Service (show pred) { image: StreamContainer, ports: Map.singleton (9000 + i) 8080, command: ["node", "index.js", "-p", "8080"] <>
-  (concat (map (\(Window _ start end) -> [
-    "-w",
-    "http://vocab.ex.org/inWindow http://" <> show pred <>":8080/#window" <> show start <> "_" <> show end <> " http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill " <> show start <> " " <> show end 
-  ]) $ fromFoldable $ fromMaybe Set.empty $ Map.lookup sNode wToS)) }
+streamNodeToService wToS i sNode@(StreamNode pred _) = Service (show pred) { image: StreamContainer, ports: Map.singleton (9000 + i) 8080, command: [
+  "node",
+  "index.js"
+] <> (concat (map (\(Window _ start end) -> [
+  "-w",
+  "#window" <> show start <> "_" <> show end <> " " <> show start <> " " <> show end 
+]) $ fromFoldable $ fromMaybe Set.empty $ Map.lookup sNode wToS)) }
 
 reasoningNodeToService :: Int -> ReasoningNode -> Service
 reasoningNodeToService i (ReasoningNode reasoningType windows (StreamNode pred terms)) = Service ("rn" <> show i) { image: ReasoningAgent, ports: Map.empty, command: [

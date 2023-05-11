@@ -1,37 +1,37 @@
 services:
   avg_speed_5:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "8080", "-w", "http://vocab.ex.org/inWindow http://avg_speed_5:8080/#window0_0 http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill 0 0"]
+    command: ["node", "index.js", "-w", "#window0_0 0 0"]
     ports:
       - 9000:8080
   boxMinus_0_60_diamondMinus_0_5_speed:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "8080", "-w", "http://vocab.ex.org/inWindow http://boxMinus_0_60_diamondMinus_0_5_speed:8080/#window0_0 http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill 0 0", "-w", "http://vocab.ex.org/inWindow http://boxMinus_0_60_diamondMinus_0_5_speed:8080/#window0_0 http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill 0 0"]
+    command: ["node", "index.js", "-w", "#window0_0 0 0"]
     ports:
       - 9001:8080
   diamondMinus_0_5_speed:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "8080", "-w", "http://vocab.ex.org/inWindow http://diamondMinus_0_5_speed:8080/#window0_0 http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill 0 0", "-w", "http://vocab.ex.org/inWindow http://diamondMinus_0_5_speed:8080/#window0_-60 http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill 0 -60", "-w", "http://vocab.ex.org/inWindow http://diamondMinus_0_5_speed:8080/#window0_0 http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill 0 0", "-w", "http://vocab.ex.org/inWindow http://diamondMinus_0_5_speed:8080/#window0_0 http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill 0 0"]
+    command: ["node", "index.js", "-w", "#window0_0 0 0", "-w", "#window0_60 0 60"]
     ports:
       - 9002:8080
   speed:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "8080", "-w", "http://vocab.ex.org/inWindow http://speed:8080/#window0_-5 http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill 0 -5"]
+    command: ["node", "index.js", "-w", "#window0_5 0 5"]
     ports:
       - 9003:8080
   stoping_for_red_light:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "8080", "-w", "http://vocab.ex.org/inWindow http://stoping_for_red_light:8080/#window0_0 http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill 0 0"]
+    command: ["node", "index.js", "-w", "#window0_0 0 0"]
     ports:
       - 9004:8080
   traffic_jam:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "8080", "-w", "http://vocab.ex.org/inWindow http://traffic_jam:8080/#window0_0 http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill 0 0"]
+    command: ["node", "index.js", "-w", "#window0_0 0 0"]
     ports:
       - 9005:8080
   traffic_light:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "8080", "-w", "http://vocab.ex.org/inWindow http://traffic_light:8080/#window0_0 http://vocab.ex.org/hasTimestamp http://vocab.ex.org/isPoisoned http://vocab.ex.org/poisonPill 0 0"]
+    command: ["node", "index.js", "-w", "#window0_0 0 0"]
     ports:
       - 9006:8080
   rn0:
@@ -39,7 +39,7 @@ services:
     command: ["node", "index.js", "AND", "-g", "http://stoping_for_red_light:8080 stoping_for_red_light ?car", "-s", "http://diamondMinus_0_5_speed:8080/#window0_0 diamondMinus_0_5_speed ?car 0", "-s", "http://traffic_light:8080/#window0_0 traffic_light red"]
   rn1:
     image: reasoning-agent:latest
-    command: ["node", "index.js", "DIAMOND", "-g", "http://diamondMinus_0_5_speed:8080 diamondMinus_0_5_speed ?car ?x", "-s", "http://speed:8080/#window0_-5 speed ?car ?x"]
+    command: ["node", "index.js", "DIAMOND", "-g", "http://diamondMinus_0_5_speed:8080 diamondMinus_0_5_speed ?car ?x", "-s", "http://error:8080/#window0_0 error "]
   rn2:
     image: reasoning-agent:latest
     command: ["node", "index.js", "AGG", "-g", "http://avg_speed_5:8080 avg_speed_5 ?var ?avg_speed", "-s", "http://diamondMinus_0_5_speed:8080/#window0_0 diamondMinus_0_5_speed ?car 0"]
@@ -48,4 +48,4 @@ services:
     command: ["node", "index.js", "AND", "-g", "http://traffic_jam:8080 traffic_jam ?car", "-s", "http://boxMinus_0_60_diamondMinus_0_5_speed:8080/#window0_0 boxMinus_0_60_diamondMinus_0_5_speed ?car 0"]
   rn4:
     image: reasoning-agent:latest
-    command: ["node", "index.js", "BOX", "-g", "http://boxMinus_0_60_diamondMinus_0_5_speed:8080 boxMinus_0_60_diamondMinus_0_5_speed ?car ?x", "-s", "http://diamondMinus_0_5_speed:8080/#window0_-60 diamondMinus_0_5_speed ?car ?x"]
+    command: ["node", "index.js", "BOX", "-g", "http://boxMinus_0_60_diamondMinus_0_5_speed:8080 boxMinus_0_60_diamondMinus_0_5_speed ?car ?x", "-s", "http://error:8080/#window0_0 error "]

@@ -25,9 +25,11 @@ import DatalogMTL (Formula(..), Interval(..), Predicate(..), Program, Rule(..), 
 
 data StreamNode = StreamNode Predicate (Array Term)
 
-derive instance eqStreamNode :: Eq StreamNode
+instance eqStreamNode :: Eq StreamNode where
+  eq (StreamNode (Predicate p1) _) (StreamNode (Predicate p2) _) = p1 == p2
 
-derive instance ordStreamNode :: Ord StreamNode
+instance ordStreamNode :: Ord StreamNode where
+  compare (StreamNode (Predicate p1) _) (StreamNode (Predicate p2) _) = compare p1 p2
 
 instance showStreamNode :: Show StreamNode where
   show (StreamNode pred _) = show pred
@@ -60,7 +62,7 @@ instance showPlan :: Show Plan where
   show (Plan rNodes sNodes wToS) = show rNodes <> "\n" <> show sNodes <> "\n" <> show wToS
 
 createPlan :: Program -> Plan
-createPlan program = Plan (catMaybes $ map ruleToReasoningNode program) (fromFoldable $ fst <$> Map.values streamNodesMap) (Map.fromFoldable $ map (\(Tuple sn ws) -> Tuple sn (Set.fromFoldable ws)) $ Map.values streamNodesMap)
+createPlan program = Plan (catMaybes $ map ruleToReasoningNode program) (fromFoldable $ fst <$> Map.values streamNodesMap) (Map.fromFoldable $ map (\(Tuple sn ws) -> Tuple sn (Set.fromFoldable $ ws)) $ Map.values streamNodesMap)
   where
     ruleToReasoningNode :: Rule -> Maybe ReasoningNode
     ruleToReasoningNode (Rule (Pred predH termsH) [ BoxPlus (Interval start end) (Pred predB _) ]) = Just $ ReasoningNode Box [ (getWindow predB start end) ] $ StreamNode predH termsH
@@ -76,7 +78,7 @@ createPlan program = Plan (catMaybes $ map ruleToReasoningNode program) (fromFol
     getWindow :: Predicate -> Int -> Int -> Window
     getWindow predicate start end = fromMaybe (Window (StreamNode (Predicate "error") []) 0 0) $ Array.head $ filter (\(Window _ s e) -> start == s && end == e) $ fromMaybe [] $ snd <$> Map.lookup predicate streamNodesMap
     streamNodesMap :: Map Predicate (Tuple StreamNode (Array Window))
-    streamNodesMap = Map.fromFoldableWith (\(Tuple sNode1 windows1) (Tuple _ windows2) -> (Tuple sNode1 $ windows1 <> windows2)) $ map (\group -> Tuple (fst $ fst $ head group) (Tuple (StreamNode (fst $ fst $ head group) (snd $ fst $ head group)) (map ((\(Tuple _ (Tuple start end)) -> Window (StreamNode (fst $ fst $ head group) (snd $ fst $ head group)) start end)) $ toArray group))) $ groupAllBy (\(Tuple p1 _) (Tuple p2 _) -> compare p1 p2) $ getTermsWithWindows program
+    streamNodesMap = Map.fromFoldableWith (\(Tuple sNode1 windows1) (Tuple _ windows2) -> (Tuple sNode1 $ windows1 <> windows2)) $ map (\group -> Tuple (fst $ fst $ head group) (Tuple (StreamNode (fst $ fst $ head group) (snd $ fst $ head group)) (map ((\(Tuple _ (Tuple start end)) -> Window (StreamNode (fst $ fst $ head group) (snd $ fst $ head group)) start (negate end))) $ toArray group))) $ groupAllBy (\(Tuple p1 _) (Tuple p2 _) -> compare p1 p2) $ getTermsWithWindows program
 
 getTermsWithWindows :: Program -> Array (Tuple (Tuple Predicate (Array Term)) (Tuple Int Int))
 getTermsWithWindows program = concat $ map getTermsWithWindowsRule program

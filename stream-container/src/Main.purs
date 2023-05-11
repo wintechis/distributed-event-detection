@@ -32,8 +32,9 @@ import CLI (DataProvider(..), Options, Window(..), optsInfo, uriOptions)
 import Control.Monad.Error.Class (try)
 import Data.Array (concat, dropWhile, filter, find, head, last, length, mapMaybe, mapWithIndex, snoc, (!!))
 import Data.Array as Array
-import Data.DateTime (DateTime, adjust, diff)
+import Data.DateTime (DateTime, adjust, diff, modifyTime, setMillisecond)
 import Data.Either (Either(..), hush)
+import Data.Enum (toEnum)
 import Data.Foldable (foldl, foldr)
 import Data.Formatter.DateTime (FormatterCommand(..), format, unformatParser)
 import Data.Int (round)
@@ -115,8 +116,8 @@ isGraphInWindow :: DateTime -> Term -> Seconds -> Seconds -> Tuple Int Graph -> 
 isGraphInWindow now contentTimestampRelation start end (Tuple _ graph) = fromMaybe false do 
   quad <- Set.findMax $ Set.filter (\q -> predicate q == contentTimestampRelation) graph
   timestamp <- hush $ runParser (value $ object quad) $ unformatParser (UnixTimestamp : Nil)
-  windowStart <- adjust (negateDuration start) now
-  windowEnd <- adjust (negateDuration end) now
+  windowStart <- adjust (negateDuration start) $ fromMaybe now $ (modifyTime <$> setMillisecond <$> toEnum 0) <*> (Just now)
+  windowEnd <- adjust (negateDuration end) $ fromMaybe now $ (modifyTime <$> setMillisecond <$> toEnum 0) <*> (Just now)
   pure $ timestamp <= windowStart && timestamp >= windowEnd
 
 membershipQuads :: Options -> DateTime -> Array (Tuple Int Graph) -> Window -> Array Quad
@@ -130,7 +131,7 @@ poisonedQuads opts now graphArray (Window window) = if (Set.size $ Set.differenc
     [ quad window.membershipResource opts.poisonRelation (literalType "false" (namedNode' xsd "boolean")) defaultGraph ]
   where
     allTimestampsInWindow :: DateTime -> DateTime -> Set DateTime
-    allTimestampsInWindow start end = if diff end start < Time.Seconds 0.0 then Set.empty else Set.union (Set.singleton end) (allTimestampsInWindow (fromMaybe start $ adjust (negateDuration $ Time.Seconds 1.0) end) start)
+    allTimestampsInWindow start end = if diff end start < Time.Seconds 0.0 then Set.empty else Set.union (Set.singleton start) (allTimestampsInWindow (fromMaybe end $ adjust (Time.Seconds 1.0) start) end)
     inWindow :: Array (Tuple Int Graph)
     inWindow = filter (isGraphInWindow now opts.contentTimestampRelation window.start window.end) graphArray
     getPoisonedTimestamp :: (Tuple Int Graph) -> Maybe DateTime 

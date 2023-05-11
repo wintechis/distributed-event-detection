@@ -116,22 +116,22 @@ isGraphInWindow :: DateTime -> Term -> Seconds -> Seconds -> Tuple Int Graph -> 
 isGraphInWindow now contentTimestampRelation start end (Tuple _ graph) = fromMaybe false do 
   quad <- Set.findMax $ Set.filter (\q -> predicate q == contentTimestampRelation) graph
   timestamp <- hush $ runParser (value $ object quad) $ unformatParser (UnixTimestamp : Nil)
-  windowStart <- adjust (negateDuration start) $ fromMaybe now $ (modifyTime <$> setMillisecond <$> toEnum 0) <*> (Just now)
-  windowEnd <- adjust (negateDuration end) $ fromMaybe now $ (modifyTime <$> setMillisecond <$> toEnum 0) <*> (Just now)
+  windowStart <- adjust (negateDuration start) now
+  windowEnd <- adjust (negateDuration end) now
   pure $ timestamp <= windowStart && timestamp >= windowEnd
 
 membershipQuads :: Options -> DateTime -> Array (Tuple Int Graph) -> Window -> Array Quad
 membershipQuads opts now graphArray (Window window) = map (\(Tuple i _) -> quad window.membershipResource opts.memberRelation (namedNode $ "/" <> show i) defaultGraph) $ getGraphsInWindow graphArray now opts.contentTimestampRelation window.start window.end
 
 poisonedQuads :: Options -> DateTime -> Array (Tuple Int Graph) -> Window -> Array Quad
-poisonedQuads opts now graphArray (Window window) = if (Set.size $ Set.difference (allTimestampsInWindow (fromMaybe now $ adjust window.start now) (fromMaybe now $ adjust window.end now)) (Set.fromFoldable $ mapMaybe getPoisonedTimestamp inWindow)) == 0
+poisonedQuads opts now graphArray (Window window) = if (Set.size $ Set.difference (allTimestampsInWindow (fromMaybe now $ adjust (negateDuration window.start) now) (fromMaybe now $ adjust (negateDuration window.end) now)) $ Set.fromFoldable $ mapMaybe getPoisonedTimestamp inWindow) == 0
   then
     [ quad window.membershipResource opts.poisonRelation (literalType "true" (namedNode' xsd "boolean")) defaultGraph ]
   else 
     [ quad window.membershipResource opts.poisonRelation (literalType "false" (namedNode' xsd "boolean")) defaultGraph ]
   where
     allTimestampsInWindow :: DateTime -> DateTime -> Set DateTime
-    allTimestampsInWindow start end = if diff end start < Time.Seconds 0.0 then Set.empty else Set.union (Set.singleton start) (allTimestampsInWindow (fromMaybe end $ adjust (Time.Seconds 1.0) start) end)
+    allTimestampsInWindow start end = if diff start end < Time.Seconds 0.0 then Set.empty else Set.union (Set.singleton start) (allTimestampsInWindow (fromMaybe start $ adjust (negateDuration $ Time.Seconds 1.0) start) end)
     inWindow :: Array (Tuple Int Graph)
     inWindow = filter (isGraphInWindow now opts.contentTimestampRelation window.start window.end) graphArray
     getPoisonedTimestamp :: (Tuple Int Graph) -> Maybe DateTime 
@@ -200,15 +200,15 @@ router :: Options -> Ref StreamContainer -> Request -> ResponseM
 router options streamContainerRef request@{ method: Get, path: [], headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   case lookup (CaseInsensitiveString "Accept-Datetime") headers of
-    -- No Accept-Datetime header in the request, use now
+    -- No Accept-Datetime header in the request, u
     Nothing -> do
       time <- liftEffect nowDateTime
-      createSCPayload streamContainer time
+      createSCPayload streamContainer $ fromMaybe time $ (modifyTime <$> setMillisecond <$> toEnum 0) <*> Just time
     Just timeString -> case runParser timeString $ unformatParser (UnixTimestamp : Nil) of
         Left error -> do
           logWarn $ "Not able to parse Accept-Datetime of request: " <> parseErrorMessage error
           logResponse request $ badRequest $ "Not able to parse Accept-Datetime of request: " <> parseErrorMessage error
-        Right time -> createSCPayload streamContainer time
+        Right time -> createSCPayload streamContainer $ fromMaybe time $ (modifyTime <$> setMillisecond <$> toEnum 0) <*> Just time
   where
     createSCPayload streamContainer time = do
       -- serialize Triples for SC

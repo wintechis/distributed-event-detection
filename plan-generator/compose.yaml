@@ -1,37 +1,37 @@
 services:
   avg_speed_5:
     image: stream-container:latest
-    command: ["node", "index.js", "-w", "#window0_0 0 0"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/avg_speed_5", "-w", "#window0_0 0 0"]
     ports:
       - 9000:8080
   boxMinus_0_60_diamondMinus_0_5_speed:
     image: stream-container:latest
-    command: ["node", "index.js", "-w", "#window0_0 0 0"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/boxMinus_0_60_diamondMinus_0_5_speed", "-w", "#window0_0 0 0"]
     ports:
       - 9001:8080
   diamondMinus_0_5_speed:
     image: stream-container:latest
-    command: ["node", "index.js", "-w", "#window0_0 0 0", "-w", "#window0_60 0 60"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/diamondMinus_0_5_speed", "-w", "#window0_0 0 0", "-w", "#window0_60 0 60"]
     ports:
       - 9002:8080
   speed:
     image: stream-container:latest
-    command: ["node", "index.js", "-w", "#window0_5 0 5"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/speed", "-w", "#window0_5 0 5", "-d", "http://cars.ex.org/car1 [10,12,14,16,18,20,20,20,15]"]
     ports:
       - 9003:8080
   stoping_for_red_light:
     image: stream-container:latest
-    command: ["node", "index.js", "-w", "#window0_0 0 0"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/stoping_for_red_light", "-w", "#window0_0 0 0"]
     ports:
       - 9004:8080
   traffic_jam:
     image: stream-container:latest
-    command: ["node", "index.js", "-w", "#window0_0 0 0"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/traffic_jam", "-w", "#window0_0 0 0"]
     ports:
       - 9005:8080
   traffic_light:
     image: stream-container:latest
-    command: ["node", "index.js", "-w", "#window0_0 0 0"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/traffic_light", "-w", "#window0_0 0 0"]
     ports:
       - 9006:8080
   rn0:

@@ -7,11 +7,13 @@ module Main
   , createPlan
   , getTermsWithWindows
   , getTermsWithWindowsRule
+  , main
   )
   where
 
 import Prelude
 
+import CLI (options)
 import Data.Array (catMaybes, concat, filter, fromFoldable, groupAllBy)
 import Data.Array as Array
 import Data.Array.NonEmpty (head, toArray)
@@ -22,6 +24,9 @@ import Data.Set (Set)
 import Data.Set as Set
 import Data.Tuple (Tuple(..), fst, snd)
 import DatalogMTL (Formula(..), Interval(..), Predicate(..), Program, Rule(..), Term)
+import Effect (Effect)
+import Effect.Console (logShow)
+import Options.Applicative (execParser)
 
 data StreamNode = StreamNode Predicate (Array Term)
 
@@ -94,3 +99,8 @@ getTermsWithWindowsFormula (BoxMinus (Interval start end) (Pred predicate terms)
 getTermsWithWindowsFormula (DiamondPlus (Interval start end) (Pred predicate terms)) = [ Tuple (Tuple predicate terms) (Tuple start end) ]
 getTermsWithWindowsFormula (DiamondMinus (Interval start end) (Pred predicate terms)) = [ Tuple (Tuple predicate terms) (Tuple (negate start) (negate end)) ]
 getTermsWithWindowsFormula _ = []
+
+main :: Effect Unit
+main = do
+  opts <- execParser options
+  logShow opts

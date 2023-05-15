@@ -1,0 +1,3 @@
+stoping_for_red_light(?car) :- DIAMONDMINUS[0,5] speed(?car, 0), traffic_light(red)
+avg_speed_5 (?car, ?avg_speed) :- ?avgspeed = DIAMONDMINUS[0,5] speed(?car, ?speed)
+traffic_jam(?car) :- BOXMINUS[0,60] DIAMONDMINUS[0,5] speed(?car, 0)

@@ -13,7 +13,7 @@ module Main
 
 import Prelude
 
-import CLI (options)
+import CLI (Options(..), options)
 import Data.Array (catMaybes, concat, filter, fromFoldable, groupAllBy)
 import Data.Array as Array
 import Data.Array.NonEmpty (head, toArray)
@@ -26,6 +26,8 @@ import Data.Tuple (Tuple(..), fst, snd)
 import DatalogMTL (Formula(..), Interval(..), Predicate(..), Program, Rule(..), Term)
 import Effect (Effect)
 import Effect.Console (logShow)
+import Node.Encoding (Encoding(..))
+import Node.FS.Sync (readTextFile)
 import Options.Applicative (execParser)
 
 data StreamNode = StreamNode Predicate (Array Term)
@@ -102,5 +104,6 @@ getTermsWithWindowsFormula _ = []
 
 main :: Effect Unit
 main = do
-  opts <- execParser options
+  (Options opts) <- execParser options
+  program <- readTextFile UTF8 opts.programPath
   logShow opts

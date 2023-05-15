@@ -41,7 +41,7 @@ stopingForRedLight :: Rule
 stopingForRedLight = Rule (Pred (Predicate "stoping_for_red_light") [Variable "car"]) [ DiamondMinus (Interval 0 5) (Pred (Predicate "speed") [ Variable "car", Constant "0" ]), Pred (Predicate "traffic_light") [ Constant "red" ] ]
 
 avgSpeed5 :: Rule
-avgSpeed5 = AggrRule (Pred (Predicate "avg_speed_5") [ Variable "var", Variable "avg_speed" ]) Average (Variable "avg_speed") (DiamondMinus (Interval 0 5) (Pred (Predicate "speed") [ Variable "car", Variable "speed" ]))
+avgSpeed5 = AggrRule (Pred (Predicate "avg_speed_5") [ Variable "car", Variable "avg_speed" ]) Average (Variable "avg_speed") (DiamondMinus (Interval 0 5) (Pred (Predicate "speed") [ Variable "car", Variable "speed" ]))
 
 trafficJam :: Rule 
 trafficJam = Rule (Pred (Predicate "traffic_jam") [Variable "car"]) [ BoxMinus (Interval 0 60) (DiamondMinus (Interval 0 5) (Pred (Predicate "speed") [ Variable "car", Constant "0" ])) ]

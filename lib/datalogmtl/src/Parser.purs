@@ -6,7 +6,7 @@ import Control.Alt ((<|>))
 import Control.Alternative (guard)
 import Data.Array as Array
 import Data.Either (Either(..))
-import DatalogMTL (Formula(..), Interval(..), Predicate(..), Rule(..), Term(..), Program)
+import DatalogMTL (Aggregation(..), Formula(..), Interval(..), Predicate(..), Program, Rule(..), Term(..))
 import Effect (Effect)
 import Effect.Console (log, logShow)
 import Parsing (Parser, runParser)
@@ -32,7 +32,7 @@ datalogMTLLanguageDef = LanguageDef {
   opLetter: char '-' <|> upper,
   opStart: char ':' <|> char '?' <|> upper,
   reservedNames: [],
-  reservedOpNames: [ "?", ":-", "BOXPLUS", "BOXMINUS", "DIAMONDPLUS", "DIAMONDMINUS" ]
+  reservedOpNames: [ "?", ":-", "BOXPLUS", "BOXMINUS", "DIAMONDPLUS", "DIAMONDMINUS", "=", "mavg" ]
 }
 
 datalogMTLTokenParser :: TokenParser
@@ -40,7 +40,7 @@ datalogMTLTokenParser = makeTokenParser datalogMTLLanguageDef
 
 programParser :: Parser String Program
 programParser = do
-  fs <- many ruleParser
+  fs <- many (try aggregationRuleParser <|> ruleParser)
   _ <- eof
   pure $ fs
 
@@ -51,6 +51,20 @@ ruleParser = do
   _ <- datalogMTLTokenParser.reservedOp ":-"
   body <- datalogMTLTokenParser.commaSep $ formulaParser
   pure $ Rule head $ Array.fromFoldable body
+
+aggregationRuleParser :: Parser String Rule
+aggregationRuleParser = do
+  _ <- datalogMTLTokenParser.whiteSpace
+  head <- formulaParser
+  _ <- datalogMTLTokenParser.reservedOp ":-"
+  aggVar <- variableParser
+  _ <- datalogMTLTokenParser.reservedOp "="
+  aggregation <- aggregationParser
+  body <- datalogMTLTokenParser.parens $ formulaParser
+  pure $ AggrRule head aggregation aggVar body
+
+aggregationParser :: Parser String Aggregation
+aggregationParser = datalogMTLTokenParser.reservedOp "mavg" >>= \_ -> pure Average
 
 formulaParser :: Parser String Formula
 formulaParser = do
@@ -117,10 +131,13 @@ diamondMinusParser = do
 testString :: String
 testString = "BOXMINUS[3,5] speed(?x, 10,   ?daniel ,?car,123) :-  BOXPLUS[4, 7] DIAMONDPLUS[0,0] car(?daniel), speed( ?x) , BOXMINUS[1123,23123] bla(123, ?beep)\n  BOXPLUS[3,5] speed(?x, 10,   ?daniel ,?car , 124) :-  DIAMONDPLUS[0,0] car(?daniel), speed( ?x) , BOXMINUS[1123,23123] bla(123, ?beep)"
 
+testAgg :: String
+testAgg = "avg_speed_5(?car, ?avg_speed) :-  ?avg_speed = mavg(DIAMONDMINUS[0,5] speed(?car, ?speed))"
+
 testFormula :: String
 testFormula = "BOXPLUS[3,5] DIAMONDMINUS[-2,4] speed(?x, 10,   ?daniel ,?car,123)"
 
 main :: Effect Unit
 main = do
   log testString
-  logShow $ runParser testString programParser
+  logShow $ runParser testAgg programParser

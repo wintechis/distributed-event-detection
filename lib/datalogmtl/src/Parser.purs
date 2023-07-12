@@ -8,7 +8,9 @@ import Data.Array as Array
 import Data.Either (Either(..))
 import DatalogMTL (Aggregation(..), Formula(..), Interval(..), Predicate(..), Program, Rule(..), Term(..))
 import Effect (Effect)
-import Effect.Console (log, logShow)
+import Effect.Console (logShow)
+import Node.Encoding (Encoding(..))
+import Node.FS.Sync (readTextFile)
 import Parsing (Parser, runParser)
 import Parsing.Combinators (try)
 import Parsing.Combinators.Array (many)
@@ -139,5 +141,5 @@ testFormula = "BOXPLUS[3,5] DIAMONDMINUS[-2,4] speed(?x, 10,   ?daniel ,?car,123
 
 main :: Effect Unit
 main = do
-  log testString
-  logShow $ runParser testAgg programParser
+  program <- readTextFile UTF8 "../../plan-generator/program.dmtl"
+  logShow $ runParser program programParser

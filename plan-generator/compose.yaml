@@ -1,51 +1,27 @@
 services:
-  avg_speed_5:
+  a:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "http://vocab.ex.org/avg_speed_5", "-w", "#window0_0 0 0"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/a", "-w", "#window0_3 0 3"]
     ports:
       - 9000:8080
-  boxMinus_0_60_diamondMinus_0_5_speed:
+  aa:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "http://vocab.ex.org/boxMinus_0_60_diamondMinus_0_5_speed", "-w", "#window0_0 0 0"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/aa", "-w", "#window0_3 0 3"]
     ports:
       - 9001:8080
-  diamondMinus_0_5_speed:
+  b:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "http://vocab.ex.org/diamondMinus_0_5_speed", "-w", "#window0_0 0 0", "-w", "#window0_60 0 60"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/b", "-w", "#window0_0 0 0"]
     ports:
       - 9002:8080
-  speed:
+  bb:
     image: stream-container:latest
-    command: ["node", "index.js", "-p", "http://vocab.ex.org/speed", "-w", "#window0_5 0 5", "-d", "http://cars.ex.org/car1 [10,12,14,16,18,20,20,20,15]", "-d", "http://cars.ex.org/car2 [15,15,15,15,18,18,18,18,18,18]"]
+    command: ["node", "index.js", "-p", "http://vocab.ex.org/bb", "-w", "#window0_0 0 0"]
     ports:
       - 9003:8080
-  stoping_for_red_light:
-    image: stream-container:latest
-    command: ["node", "index.js", "-p", "http://vocab.ex.org/stoping_for_red_light", "-w", "#window0_0 0 0"]
-    ports:
-      - 9004:8080
-  traffic_jam:
-    image: stream-container:latest
-    command: ["node", "index.js", "-p", "http://vocab.ex.org/traffic_jam", "-w", "#window0_0 0 0"]
-    ports:
-      - 9005:8080
-  traffic_light:
-    image: stream-container:latest
-    command: ["node", "index.js", "-p", "http://vocab.ex.org/traffic_light", "-w", "#window0_0 0 0"]
-    ports:
-      - 9006:8080
   rn0:
     image: reasoning-agent:latest
-    command: ["node", "index.js", "AND", "-g", "http://stoping_for_red_light:8080 stoping_for_red_light ?car", "-s", "http://diamondMinus_0_5_speed:8080/#window0_0 diamondMinus_0_5_speed ?car 0", "-s", "http://traffic_light:8080/#window0_0 traffic_light red"]
+    command: ["node", "index.js", "DIAMOND", "-g", "http://b:8080 b ?x", "-s", "http://a:8080/#window0_3 ?x "]
   rn1:
     image: reasoning-agent:latest
-    command: ["node", "index.js", "DIAMOND", "-g", "http://diamondMinus_0_5_speed:8080 diamondMinus_0_5_speed ?car ?x", "-s", "http://error:8080/#window0_0 error "]
-  rn2:
-    image: reasoning-agent:latest
-    command: ["node", "index.js", "AGG", "-g", "http://avg_speed_5:8080 avg_speed_5 ?var ?avg_speed", "-s", "http://diamondMinus_0_5_speed:8080/#window0_0 diamondMinus_0_5_speed ?car 0"]
-  rn3:
-    image: reasoning-agent:latest
-    command: ["node", "index.js", "AND", "-g", "http://traffic_jam:8080 traffic_jam ?car", "-s", "http://boxMinus_0_60_diamondMinus_0_5_speed:8080/#window0_0 boxMinus_0_60_diamondMinus_0_5_speed ?car 0"]
-  rn4:
-    image: reasoning-agent:latest
-    command: ["node", "index.js", "BOX", "-g", "http://boxMinus_0_60_diamondMinus_0_5_speed:8080 boxMinus_0_60_diamondMinus_0_5_speed ?car ?x", "-s", "http://error:8080/#window0_0 error "]
+    command: ["node", "index.js", "BOX", "-g", "http://bb:8080 bb ?x", "-s", "http://aa:8080/#window0_3 ?x"]

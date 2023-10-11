@@ -15,7 +15,7 @@ import DatalogMTL (Predicate(..), Program, normalForm)
 import Dodo (Doc, break, foldWithSeparator, indent, plainText, print, text, twoSpaces)
 import Effect (Effect)
 import Effect.Console (log, logShow)
-import Main (Plan(..), ReasoningNode(..), ReasoningType(..), StreamNode(..), Window(..), createPlan)
+import Frontend (Plan(..), ReasoningNode(..), ReasoningType(..), StreamNode(..), Window(..), createPlan)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (writeTextFile)
 import RDF (Term, literalType, namedNode, namedNode', value)
@@ -88,6 +88,11 @@ serviceToDoc (Service name config) = text name <> text ":" <> break <> (indent $
 
 showProgram :: Program -> String
 showProgram rules = "[\n" <> joinWith "\n" (map (\r -> "  " <> show r) rules) <> "\n]"
+
+writeCompose :: Program -> Effect Unit
+writeCompose program = do
+  let parameters = Parameters { inputs: [] }
+  writeTextFile UTF8 "compose.yaml" (print plainText twoSpaces $ composeToDoc $ planToCompose parameters $ createPlan $ normalForm program)
 
 main :: Effect Unit
 main = do

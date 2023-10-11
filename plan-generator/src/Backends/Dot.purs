@@ -11,7 +11,7 @@ import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Set (Set)
 import DatalogMTL (Aggregation(..), Formula(..), Interval(..), Predicate(..), Program, Rule(..), Term(..))
-import Main (Plan(..), ReasoningNode(..), StreamNode(..), Window(..))
+import Frontend (Plan(..), ReasoningNode(..), StreamNode(..), Window(..))
 
 planToGraph :: Plan -> Graph
 planToGraph (Plan rNodes sNodes wToS) = DiGraph $ (mapWithIndex planToGraphReasoningNode rNodes <> map (planToGraphStreamNode wToS) sNodes) <> (concat $ mapWithIndex planToGraphEdges rNodes)

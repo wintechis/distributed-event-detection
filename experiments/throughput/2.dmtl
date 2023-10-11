@@ -1,0 +1,2 @@
+b(?x) :- DIAMONDMINUS[0,3] a(?x)
+bb(?x) :- BOXMINUS[0,3] aa(?x)

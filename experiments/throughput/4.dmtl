@@ -1,0 +1,15 @@
+b(?X) :- DIAMONDMINUS[0,3] a(?X)
+c(?X) :- BOXMINUS[0,3] b(?X)
+d(?X) :- DIAMONDMINUS[0,3] c(?X)
+
+bb(?X) :- BOXMINUS[0,3] aa(?X)
+cc(?X) :- DIAMONDMINUS[0,3] bb(?X)
+dd(?X) :- BOXMINUS[0,3] cc(?X)
+
+bbb(?X) :- DIAMONDMINUS[0,3] aaa(?X)
+ccc(?X) :- BOXMINUS[0,3] bbb(?X)
+ddd(?X) :- DIAMONDMINUS[0,3] ccc(?X)
+
+bbbb(?X) :- BOXMINUS[0,3] aaaa(?X)
+cccc(?X) :- DIAMONDMINUS[0,3] bbbb(?X)
+dddd(?X) :- BOXMINUS[0,3] cccc(?X)

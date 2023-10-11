@@ -1,0 +1,8 @@
+b(?X) :- DIAMONDMINUS[0,3] a(?X)
+c(?X) :- BOXMINUS[0,3] b(?X)
+
+bb(?X) :- BOXMINUS[0,3] aa(?X)
+cc(?X) :- DIAMONDMINUS[0,3] bb(?X)
+
+bbb(?X) :- DIAMONDMINUS[0,3] aaa(?X)
+ccc(?X) :- BOXMINUS[0,3] bbb(?X)

@@ -9,7 +9,7 @@ import Data.List (List)
 import Data.Maybe (Maybe(..))
 import Data.Number as Number
 import Data.String (Pattern(..), split, stripPrefix, toLower)
-import Options.Applicative (Parser, ParserInfo, ReadM, argument, briefDesc, eitherReader, help, helper, info, long, many, metavar, option, progDesc, short, (<**>))
+import Options.Applicative (Parser, ParserInfo, ReadM, argument, briefDesc, eitherReader, help, helper, info, int, long, many, metavar, option, progDesc, short, (<**>))
 import RDF (Term, literalType, namedNode, namedNode', variable)
 import RDF.Prefixes (xsd)
 
@@ -32,6 +32,7 @@ data Terms = Unary Term | Binary Term Term
 
 type Options = {
     ruleType :: RuleType,
+    cycleTime :: Int,
     sources :: List Stream,
     builtins :: List Builtin,
     goal :: Stream
@@ -45,13 +46,17 @@ optsInfo = info (opts <**> helper)
 opts :: Parser Options
 opts = ado
   ruleType <- ruleType
+  cycleTime <- cycleTime
   sources <- sources
   builtins <- builtins
   goal <- goal
-  in { ruleType, sources, builtins, goal }
+  in { ruleType, cycleTime, sources, builtins, goal }
 
 ruleType :: Parser RuleType
 ruleType = argument ruleTypeReader (metavar "RULE_TYPE" <> help "The type of rule for this agent to process. Possible are AND, BOX, and DIAMOND.")
+
+cycleTime :: Parser Int
+cycleTime = option int (long "cycle-time" <> short 'c' <> metavar "MILLISECONDS" <> help "The cylce time of the agent in milliseconds.")
 
 ruleTypeReader :: ReadM RuleType
 ruleTypeReader = eitherReader read

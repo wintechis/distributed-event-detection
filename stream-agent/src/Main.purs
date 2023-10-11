@@ -30,6 +30,7 @@ import Data.Time.Duration (negateDuration)
 import Data.Time.Duration as Duration
 import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..), snd)
+import Debug (traceM)
 import Effect (Effect)
 import Effect.Aff (Aff, launchAff_)
 import Effect.Class (liftEffect)
@@ -119,7 +120,7 @@ naturalJoin (Relation (RelationHeader header1) rows1) (Relation (RelationHeader 
 getRelationForSource :: DateTime -> Stream -> Aff (Maybe Relation)
 getRelationForSource dateTime (Stream uri pred variables) = do
   containerQuads <- getQuads dateTime uri
-  case find (\q -> predicate q == namedNode "http://ex.org/vocab/poisoned" && object q == literalType "true" (namedNode' xsd "boolean")) containerQuads of
+  case find (\q -> predicate q == namedNode "http://vocab.ex.org/isPoisoned" && object q == literalType "true" (namedNode' xsd "boolean")) containerQuads of
     Nothing -> pure Nothing
     Just q | object q == literalType "false" (namedNode' xsd "boolean") -> pure Nothing
     _ -> do
@@ -138,11 +139,11 @@ getRelationForSource dateTime (Stream uri pred variables) = do
 postRelationToGoal :: DateTime -> Stream -> Relation -> Aff Unit
 postRelationToGoal dateTime (Stream uri pred variables) (Relation (RelationHeader header) rows) = do
   case variables of
-    Unary var -> if length payload > 0 then parSequence_ $ map (\quads -> postQuads (quads <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri) payload else postQuads [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph, quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] uri
+    Unary var -> if length payload > 0 then parSequence_ $ map (\quads -> postQuads (quads <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri) payload else postQuads [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph, quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] uri
       where
         payload :: Array (Array Quad)
         payload = map (\(Tuple i t) -> [ quad t (namedNode' rdf "type") pred defaultGraph ] <> if i == (length rows) - 1 then [ quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] else []) $ catMaybes $ mapWithIndex (getTermFromRelationRow var) rows
-    Binary var1 var2 -> if length payload > 0 then parSequence_ $ map (\quads -> postQuads (quads <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri) payload else postQuads [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format iso8601Formatter dateTime) (namedNode' xsd "dateTime")) defaultGraph, quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] uri
+    Binary var1 var2 -> if length payload > 0 then parSequence_ $ map (\quads -> postQuads (quads <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri) payload else postQuads [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph, quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] uri
       where
         payload :: Array (Array Quad)
         payload = map (\(Tuple (Tuple i t1) (Tuple _ t2)) -> [ quad t1 pred t2 defaultGraph ] <> if i == (length rows) - 1 then [ quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] else []) $ catMaybes $ mapWithIndex (\i r -> Tuple <$> (getTermFromRelationRow var1 i r) <*> (getTermFromRelationRow var2 i r)) rows
@@ -155,8 +156,8 @@ postRelationToGoal dateTime (Stream uri pred variables) (Relation (RelationHeade
 
 getQuads :: DateTime -> URL -> Aff (Array Quad)
 getQuads acceptDateTime url = do
-  liftEffect $ log ("GET " <> url <> "\tAccept-Datetime: " <> format iso8601Formatter acceptDateTime)
-  responseOrError <- request (defaultRequest { url = url, method = Left GET, responseFormat = string, headers = [ RequestHeader "Accept-Datetime" $ format iso8601Formatter acceptDateTime ] })
+  liftEffect $ log ("GET " <> url <> "\tAccept-Datetime: " <> format (UnixTimestamp : Nil) acceptDateTime)
+  responseOrError <- request (defaultRequest { url = url, method = Left GET, responseFormat = string, headers = [ RequestHeader "Accept-Datetime" $ format (UnixTimestamp : Nil) acceptDateTime ] })
   case responseOrError of 
     Left error -> do
       liftEffect $ log $ printError error
@@ -179,14 +180,14 @@ main = do
   opts <-execParser optsInfo
   logShow opts
   queueRef <- new Nil
-  _ <- setInterval 1000 $ newElement queueRef
-  void $ setInterval 500 $ work opts queueRef
+  _ <- setInterval opts.cycleTime $ newElement queueRef
+  void $ setInterval (opts.cycleTime / 2) $ work opts queueRef
 
 newElement :: Ref (List DateTime) -> Effect Unit
 newElement queueRef = do
   dateTime <- liftEffect $ nowDateTime
   let roundedDateTime = fromMaybe dateTime $ adjust (negateDuration $ (\ms -> Duration.Milliseconds ms) $ toNumber $ fromEnum $ millisecond $ time dateTime) dateTime
-  liftEffect $ log $ "Time: " <> format iso8601Formatter roundedDateTime
+  liftEffect $ log $ "Time: " <> format ( UnixTimestamp : Nil ) roundedDateTime
   modify_ (\queue -> roundedDateTime : queue) queueRef
 
 work :: Options -> Ref (List DateTime) -> Effect Unit

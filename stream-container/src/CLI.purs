@@ -2,17 +2,19 @@ module CLI where
 
 import Prelude
 
+import Control.Alt ((<|>))
 import Data.Array (head, length, tail)
 import Data.Either (Either(..), hush, note)
 import Data.Int (fromString, toNumber)
 import Data.List (List)
 import Data.Maybe (Maybe(..))
-import Data.String (Pattern(..), joinWith, split, stripPrefix, stripSuffix, trim)
+import Data.String (Pattern(..), joinWith, split, stripPrefix, stripSuffix, toLower, trim)
 import Data.String.NonEmpty (nes)
 import Data.These (These(..))
 import Data.Time.Duration (Seconds(..))
 import Data.Traversable (sequence)
 import Options.Applicative (Parser, ParserInfo, ReadM, briefDesc, eitherReader, help, helper, info, int, long, many, maybeReader, metavar, option, progDesc, short, showDefault, showDefaultWith, str, value, (<**>))
+import Options.Applicative.Types (optional)
 import Parsing (runParser)
 import RDF (Term, literalType, namedNode, namedNode')
 import RDF.Prefixes (xsd)
@@ -25,6 +27,8 @@ import URI.HostPortPair as HostPortPair
 import URI.Port as Port
 import URI.Scheme.Common (http)
 import URI.URI (URIOptions)
+
+data Experiment = Throughput | Latency
 
 data Window = Window {
   membershipResource :: Term,
@@ -63,7 +67,9 @@ type Options = {
   contentTimestampRelation :: Term,
   poisonRelation :: Term,
   contentPoisonRelation :: Term,
-  windows :: List Window
+  windows :: List Window,
+  experiment :: Maybe Experiment,
+  cycleTime :: Int
 }
 
 optsInfo :: ParserInfo Options
@@ -83,7 +89,9 @@ opts = ado
   poisonRelation <- poisonRelation
   contentPoisonRelation <- contentPoisonRelation
   windows <- windows
-  in { uri: URI http (HierarchicalPartAuth (Authority Nothing $ Just $ Both hostname port) $ Path []) Nothing Nothing, predicate, grace, dataProviders, memberRelation, contentTimestampRelation, poisonRelation, contentPoisonRelation, windows }
+  experiment <- experiment
+  cycleTime <- cycleTime
+  in { uri: URI http (HierarchicalPartAuth (Authority Nothing $ Just $ Both hostname port) $ Path []) Nothing Nothing, predicate, grace, dataProviders, memberRelation, contentTimestampRelation, poisonRelation, contentPoisonRelation, windows, experiment, cycleTime }
 
 hostname :: Parser Host
 hostname = option (maybeReader (\s -> hush $ runParser s Host.parser )) (long "hostname" <> short 'H' <> metavar "HOSTNAME" <> showDefaultWith Host.print <> value (NameAddress $ RegName.fromString (nes $ (Proxy :: Proxy "localhost"))) <> help "The hostname under which the stream container shall run.")
@@ -129,6 +137,21 @@ contentPoisonRelation = option (namedNode <$> str) (long "content-poison-relatio
 
 windows :: Parser (List Window)
 windows = many $ option windowReader (long "window" <> short 'w' <> metavar "MEMBERSHIP_RESOURCE START END" <> help "A window for the Stream Container to start with.")
+
+experiment :: Parser (Maybe Experiment)
+experiment = optional $ option experimentReader (long "experiment" <> short 'e' <> help "Turn on measurments for experiments")
+
+experimentReader :: ReadM Experiment
+experimentReader = eitherReader parse
+  where
+    parse :: String -> Either String Experiment
+    parse string = case (toLower string) of
+      "throughput" -> Right Throughput
+      "latency" -> Right Latency
+      _ -> Left "Experiment option has to be either \"throughput\" or \"latency\""
+
+cycleTime :: Parser Int
+cycleTime = option int (long "cycle-time" <> metavar "MILLISECONDS" <> help "Cycle time for data providers in milliseconds." <> value 1000) 
 
 windowReader :: ReadM Window
 windowReader = eitherReader parse

@@ -9,7 +9,7 @@ import Affjax.ResponseFormat (string)
 import CLI (Builtin(..), Options, Stream(..), Terms(..), optsInfo)
 import Control.Alternative (guard)
 import Control.Parallel (parSequence, parSequence_, parTraverse)
-import Data.Array (catMaybes, concatMap, filter, find, findIndex, foldl, index, length, mapMaybe, mapWithIndex, (!!))
+import Data.Array (catMaybes, concatMap, filter, find, findIndex, foldl, index, length, mapMaybe, mapWithIndex, nub, (!!))
 import Data.Array as Array
 import Data.Array.NonEmpty (foldl1)
 import Data.Array.NonEmpty as NonEmpty
@@ -23,6 +23,7 @@ import Data.Int (toNumber)
 import Data.List (List(..), delete, fromFoldable, (:))
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Number (fromString)
+import Data.Posix.Signal (Signal(..))
 import Data.Set (Set, member)
 import Data.Set as Set
 import Data.String (joinWith)
@@ -30,16 +31,16 @@ import Data.Time.Duration (negateDuration)
 import Data.Time.Duration as Duration
 import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..), snd)
-import Debug (traceM)
 import Effect (Effect)
 import Effect.Aff (Aff, launchAff_)
 import Effect.Class (liftEffect)
-import Effect.Console (log, logShow)
+import Effect.Console (log)
 import Effect.Now (nowDateTime)
 import Effect.Ref (Ref, modify_, new, read)
 import Effect.Ref as Ref
 import Effect.Timer (setInterval)
 import N3 (Format(..), parse, write)
+import Node.Process (exit, onSignal)
 import Options.Applicative (execParser)
 import RDF (Quad, Term, defaultGraph, literalType, namedNode, namedNode', object, predicate, quad, subject, termType, value)
 import RDF.Prefixes (rdf, xsd)
@@ -85,6 +86,8 @@ filterBuiltin (Relation (RelationHeader header) rows) (LessThanEqual term1 term2
 newtype RelationRow = RelationRow (Array Term)
 instance showRelationRow :: Show RelationRow where
   show (RelationRow row) = "(" <> (joinWith ", " $ map show row) <> ")\n"
+derive instance eqRelationRow :: Eq RelationRow
+derive instance ordRelationRow :: Ord RelationRow
 newtype RelationHeader = RelationHeader (Array Term)
 instance showRelationHeader :: Show RelationHeader where
   show (RelationHeader header) = (joinWith ", " $ map show header) <> "\n"
@@ -124,7 +127,7 @@ getRelationForSource dateTime (Stream uri pred variables) = do
     Nothing -> pure Nothing
     Just q | object q == literalType "false" (namedNode' xsd "boolean") -> pure Nothing
     _ -> do
-      let obsInWindow = map (\q -> value $ object q) $ filter (\q -> subject q == namedNode uri && predicate q == namedNode "http://ex.org/vocab/inWindow") containerQuads
+      let obsInWindow = map (\q -> value $ object q) $ filter (\q -> subject q == namedNode uri && predicate q == namedNode "http://vocab.ex.org/inWindow") containerQuads
       obsQuadArrays <- parSequence $ getQuads dateTime <$> obsInWindow :: Aff (Array (Array Quad))
       case variables of 
         Unary var -> do
@@ -139,14 +142,14 @@ getRelationForSource dateTime (Stream uri pred variables) = do
 postRelationToGoal :: DateTime -> Stream -> Relation -> Aff Unit
 postRelationToGoal dateTime (Stream uri pred variables) (Relation (RelationHeader header) rows) = do
   case variables of
-    Unary var -> if length payload > 0 then parSequence_ $ map (\quads -> postQuads (quads <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri) payload else postQuads [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph, quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] uri
+    Unary var -> if length payload > 0 then parSequence_ $ map (\quads -> postQuads (quads <> [ quad (namedNode "") (namedNode "http://vocab.ex.org/hasTimestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri) payload else postQuads [ quad (namedNode "") (namedNode "http://vocab.ex.org/hasTimestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph, quad (namedNode "") (namedNode "http://vocab.ex.org/hasPoison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] uri
       where
         payload :: Array (Array Quad)
-        payload = map (\(Tuple i t) -> [ quad t (namedNode' rdf "type") pred defaultGraph ] <> if i == (length rows) - 1 then [ quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] else []) $ catMaybes $ mapWithIndex (getTermFromRelationRow var) rows
-    Binary var1 var2 -> if length payload > 0 then parSequence_ $ map (\quads -> postQuads (quads <> [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri) payload else postQuads [ quad (namedNode "") (namedNode "http://ex.org/vocab/timestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph, quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] uri
+        payload = map (\(Tuple i t) -> [ quad t (namedNode' rdf "type") pred defaultGraph ] <> if i == (length rows) - 1 then [ quad (namedNode "") (namedNode "http://vocab.ex.org/hasPoison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] else []) $ catMaybes $ mapWithIndex (getTermFromRelationRow var) $ rows
+    Binary var1 var2 -> if length payload > 0 then parSequence_ $ map (\quads -> postQuads (quads <> [ quad (namedNode "") (namedNode "http://vocab.ex.org/hasTimestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph ]) uri) payload else postQuads [ quad (namedNode "") (namedNode "http://vocab.ex.org/hasTimestamp") (literalType (format (UnixTimestamp : Nil) dateTime) (namedNode' xsd "dateTime")) defaultGraph, quad (namedNode "") (namedNode "http://vocab.ex.org/hasPoison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] uri
       where
         payload :: Array (Array Quad)
-        payload = map (\(Tuple (Tuple i t1) (Tuple _ t2)) -> [ quad t1 pred t2 defaultGraph ] <> if i == (length rows) - 1 then [ quad (namedNode "") (namedNode "http://ex.org/vocab/poison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] else []) $ catMaybes $ mapWithIndex (\i r -> Tuple <$> (getTermFromRelationRow var1 i r) <*> (getTermFromRelationRow var2 i r)) rows
+        payload = map (\(Tuple (Tuple i t1) (Tuple _ t2)) -> [ quad t1 pred t2 defaultGraph ] <> if i == (length $ nub $ rows) - 1 then [ quad (namedNode "") (namedNode "http://vocab.ex.org/hasPoison") (literalType "true" (namedNode' xsd "boolean")) defaultGraph ] else []) $ catMaybes $ mapWithIndex (\i r -> Tuple <$> (getTermFromRelationRow var1 i r) <*> (getTermFromRelationRow var2 i r)) $ nub $ rows
     where
       getTermFromRelationRow :: Term -> Int -> RelationRow -> Maybe (Tuple Int Term)
       getTermFromRelationRow head index (RelationRow row) = do
@@ -156,7 +159,7 @@ postRelationToGoal dateTime (Stream uri pred variables) (Relation (RelationHeade
 
 getQuads :: DateTime -> URL -> Aff (Array Quad)
 getQuads acceptDateTime url = do
-  liftEffect $ log ("GET " <> url <> "\tAccept-Datetime: " <> format (UnixTimestamp : Nil) acceptDateTime)
+  --liftEffect $ log ("GET " <> url <> "\tAccept-Datetime: " <> format (UnixTimestamp : Nil) acceptDateTime)
   responseOrError <- request (defaultRequest { url = url, method = Left GET, responseFormat = string, headers = [ RequestHeader "Accept-Datetime" $ format (UnixTimestamp : Nil) acceptDateTime ] })
   case responseOrError of 
     Left error -> do
@@ -166,7 +169,7 @@ getQuads acceptDateTime url = do
 
 postQuads :: Array Quad -> URL -> Aff Unit
 postQuads quads url = do
-  liftEffect $ log ("POST " <> url)
+  --liftEffect $ log ("POST " <> url)
   payload <- write url Turtle quads
   responseOrError <- post string url (Just $ String payload)
   case responseOrError of 
@@ -178,7 +181,9 @@ postQuads quads url = do
 main :: Effect Unit
 main = do
   opts <-execParser optsInfo
-  logShow opts
+  --if isJust opts.experiment then onSignal SIGTERM (printExperiment counterRef now) else onSignal SIGTERM (exit 0)
+  onSignal SIGTERM (exit 0)
+  --logShow opts
   queueRef <- new Nil
   _ <- setInterval opts.cycleTime $ newElement queueRef
   void $ setInterval (opts.cycleTime / 2) $ work opts queueRef
@@ -187,7 +192,7 @@ newElement :: Ref (List DateTime) -> Effect Unit
 newElement queueRef = do
   dateTime <- liftEffect $ nowDateTime
   let roundedDateTime = fromMaybe dateTime $ adjust (negateDuration $ (\ms -> Duration.Milliseconds ms) $ toNumber $ fromEnum $ millisecond $ time dateTime) dateTime
-  liftEffect $ log $ "Time: " <> format ( UnixTimestamp : Nil ) roundedDateTime
+  --liftEffect $ log $ "Time: " <> format ( UnixTimestamp : Nil ) roundedDateTime
   modify_ (\queue -> roundedDateTime : queue) queueRef
 
 work :: Options -> Ref (List DateTime) -> Effect Unit
@@ -205,5 +210,4 @@ workOne opts datetime = do
       let joined = fromMaybe (newRelation (RelationHeader [])) $ (foldl1 naturalJoin) <$> (NonEmpty.fromArray relations)
       let builtinJoined = foldl filterBuiltin joined $ Array.fromFoldable opts.builtins
       postRelationToGoal datetime opts.goal builtinJoined
-      liftEffect $ logShow builtinJoined
       pure $ Just datetime

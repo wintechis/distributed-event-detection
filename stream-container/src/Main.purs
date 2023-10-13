@@ -28,20 +28,22 @@ module Main
 
 import Prelude
 
-import CLI (DataProvider(..), Options, Window(..), optsInfo, uriOptions)
+import CLI (DataProvider(..), Experiment(..), Options, Window(..), optsInfo, uriOptions)
 import Control.Monad.Error.Class (try)
-import Data.Array (concat, dropWhile, filter, find, fold, head, init, last, length, mapMaybe, mapWithIndex, snoc, (!!))
+import Data.Array (concat, dropWhile, filter, find, fold, head, init, last, length, mapMaybe, mapWithIndex, snoc, toUnfoldable, (!!))
 import Data.Array as Array
-import Data.DateTime (DateTime, adjust, diff, modifyTime, setMillisecond)
+import Data.DateTime (DateTime, Millisecond, adjust, diff, modifyTime, setMillisecond)
 import Data.Either (Either(..), hush)
 import Data.Enum (toEnum)
 import Data.Foldable (foldl, foldr)
-import Data.Formatter.DateTime (FormatterCommand(..), format, unformatParser)
+import Data.Formatter.DateTime (Formatter, FormatterCommand(..), format, unformatParser)
+import Data.Formatter.DateTime as Formatter
 import Data.Int (round, toNumber)
 import Data.Int as Integer
 import Data.Interval (Duration(..))
 import Data.Lens (Prism', _Just, preview, prism', set)
 import Data.List (List(..), (:))
+import Data.List as List
 import Data.Map (lookup)
 import Data.Maybe (Maybe(..), fromMaybe, isJust)
 import Data.Number (fromString)
@@ -80,6 +82,24 @@ import URI.Path.Segment (segmentFromString)
 import URI.Port (toInt)
 import URI.URI (_authority, _hierPart, _hosts, _path)
 import URI.URI as URI
+
+iso8601Formatter :: Formatter
+iso8601Formatter = List.fromFoldable
+  [ YearFull
+  , Placeholder "-"
+  , MonthTwoDigits
+  , Placeholder "-"
+  , DayOfMonthTwoDigits
+  , Placeholder "T"
+  , Hours24
+  , Placeholder ":"
+  , MinutesTwoDigits
+  , Placeholder ":"
+  , SecondsTwoDigits
+  , Placeholder "."
+  , Formatter.Milliseconds
+  , Placeholder "Z"
+  ]
 
 -- RDF Prefix for Stream Containers
 ldpsc :: Prefix
@@ -200,9 +220,9 @@ mimeForFormat NQuads = "application/n-quads"
 getUnionGraph :: StreamContainer -> Graph
 getUnionGraph (StreamContainer graphs _) = foldl union empty $ snd <$> graphs
 
-router :: Options -> Ref Int -> Ref StreamContainer -> Request -> ResponseM
+router :: Options -> Ref Int -> Ref (Array DateTime) -> Ref StreamContainer -> Request -> ResponseM
 -- GET /
-router options _ streamContainerRef request@{ method: Get, path: [], headers: (Headers headers) } = do
+router options _ _ streamContainerRef request@{ method: Get, path: [], headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   case lookup (CaseInsensitiveString "Accept-Datetime") headers of
     -- No Accept-Datetime header in the request, u
@@ -225,7 +245,7 @@ router options _ streamContainerRef request@{ method: Get, path: [], headers: (H
           logResponse request $ internalServerError $ "Serializing Turtle for Stream Container failed: " <> message error
         Right body -> logResponse request $ ok' (header "Content-Type" $ mimeForFormat format) body
 -- POST /
-router options counterRef streamContainerRef request@{ method: Post, path: [], body, headers: (Headers headers) } = do
+router options counterRef latenciesRef streamContainerRef request@{ method: Post, path: [], body, headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   bodyString <- toString body
   let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
@@ -236,18 +256,19 @@ router options counterRef streamContainerRef request@{ method: Post, path: [], b
       logResponse request $ badRequest $ "Parsing request body failed: " <> message error
     Right quads -> do
       datetime <- liftEffect nowDateTime
+      liftEffect $ modify_ (\a -> a <> [datetime]) latenciesRef
       liftEffect $ modify_ (addGraphToStreamContainer options datetime $ fromFoldable quads) streamContainerRef
       liftEffect $ modify_ (\c -> c + 1) counterRef
       logResponse request created
 -- GET /all
-router options _ streamContainerRef request@{ method: Get, path : [ "all" ], headers: (Headers headers) } = do
+router options _ _ streamContainerRef request@{ method: Get, path : [ "all" ], headers: (Headers headers) } = do
   streamContainer <- liftEffect $ read streamContainerRef
   let graph = getUnionGraph streamContainer
   let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
   payload <- write (URI.print uriOptions options.uri) format $ Array.fromFoldable graph
   logResponse request $ ok' (header "Content-Type" $ mimeForFormat format) payload
 -- GET /{id}
-router options _ streamContainerRef request@{ method: Get, path, headers: (Headers headers) } | length path == 1 = (liftEffect $ read streamContainerRef) >>= \streamContainer -> case Integer.fromString (path !@ 0) of 
+router options _ _ streamContainerRef request@{ method: Get, path, headers: (Headers headers) } | length path == 1 = (liftEffect $ read streamContainerRef) >>= \streamContainer -> case Integer.fromString (path !@ 0) of 
   Nothing -> logResponse request notFound
   Just i -> case getGraphFromStreamContainer i streamContainer of 
     Nothing -> logResponse request notFound
@@ -260,7 +281,7 @@ router options _ streamContainerRef request@{ method: Get, path, headers: (Heade
           logResponse request $ internalServerError $ "Serializing triples for contained resource failed: " <> message error
         Right rdf -> logResponse request $ ok' (header "Content-Type" $ mimeForFormat format) rdf
 -- POST /window
-router options _ streamContainerRef request@{ method: Post, path: [ "window" ], body, headers: (Headers headers) } = do
+router options _ _ streamContainerRef request@{ method: Post, path: [ "window" ], body, headers: (Headers headers) } = do
   bodyString <- toString body
   let format = formatForMIME $ fromMaybe "text/turtle" $ lookup (CaseInsensitiveString "Accept") headers
   payload <- try $ parse (URI.print uriOptions options.uri) format bodyString
@@ -275,7 +296,7 @@ router options _ streamContainerRef request@{ method: Post, path: [ "window" ], 
       Just window -> do
         liftEffect $ modify_ window streamContainerRef
         logResponse request created
-router _ _ _ request = logResponse request notFound
+router _ _ _ _ request = logResponse request notFound
 
 logResponse :: forall m. MonadAff m => Request -> m Response -> m Response
 logResponse { method, path } response = do
@@ -310,10 +331,10 @@ _That = prism' That case _ of
   That a -> Just a
   Both _ a -> Just a
 
-setupProvideData :: Options -> Ref Int -> Ref StreamContainer -> Term -> Array DataProvider -> Effect Unit
-setupProvideData opts counterRef scRef predicate dataProviders = do
+setupProvideData :: Options -> Ref Int -> Ref (Array DateTime) -> Ref StreamContainer -> Term -> Array DataProvider -> Effect Unit
+setupProvideData opts counterRef latenciesRef scRef predicate dataProviders = do
   iRefsDataProviders <- sequence $ map iRefForDataProvider dataProviders
-  _ <- setInterval opts.cycleTime $ provideData opts counterRef scRef predicate iRefsDataProviders
+  _ <- setInterval opts.cycleTime $ provideData opts counterRef latenciesRef scRef predicate iRefsDataProviders
   pure unit
     where
       iRefForDataProvider :: DataProvider -> Effect (Tuple (Ref Int) DataProvider)
@@ -321,8 +342,8 @@ setupProvideData opts counterRef scRef predicate dataProviders = do
         iRef <- new 0
         pure $ Tuple iRef dp
 
-provideData :: Options -> Ref Int -> Ref StreamContainer -> Term -> Array (Tuple (Ref Int) DataProvider) -> Effect Unit
-provideData opts counterRef scRef predicate dataProviders = do
+provideData :: Options -> Ref Int -> Ref (Array DateTime) -> Ref StreamContainer -> Term -> Array (Tuple (Ref Int) DataProvider) -> Effect Unit
+provideData opts counterRef latenciesRef scRef predicate dataProviders = do
   fold <$> (sequence $ map (provideOneData false) $ fromMaybe [] $ init dataProviders)
   fromMaybe (pure unit) $ provideOneData true <$> last dataProviders
     where
@@ -344,26 +365,37 @@ provideData opts counterRef scRef predicate dataProviders = do
         launchAff_ $ logDebug $ "Inserted '" <> show (quad subject predicate object defaultGraph)
         modify_ (addGraphToStreamContainer opts now graph) scRef
         modify_ (\c -> c + 1) counterRef
+        modify_ (\a -> a <> [now]) latenciesRef
 
-printExperiment :: Ref Int -> DateTime -> Effect Unit
-printExperiment counterRef start = do
+printThroughput :: Ref Int -> DateTime -> Effect Unit
+printThroughput counterRef start = do
   now <- nowDateTime
   counter <- read counterRef
   let (DateTime.Milliseconds duration) = diff now start :: Milliseconds
   launchAff_ $ logInfo $ "Received " <> show counter <> " tokens in " <> show (duration/1000.0) <> " s. Average throughput is " <> show ((toNumber counter)/(duration/1000.0)) <> " tokens/s."
   exit 0
 
+printLatency :: Ref (Array DateTime) -> Effect Unit
+printLatency latenciesRef = do
+  latencies <- read latenciesRef
+  launchAff_ $ logInfo $ "Latencies " <> show (map (format iso8601Formatter) latencies)
+  exit 0
+
 main :: ServerM
 main = do
   streamContainerRef <- new $ emptyStreamContainer
   counterRef <- new $ 0
+  latenciesRef <- new $ []
   opts <- execParser optsInfo
   now <- nowDateTime
-  if isJust opts.experiment then onSignal SIGTERM (printExperiment counterRef now) else onSignal SIGTERM (exit 0)
-  _ <- setupProvideData opts counterRef streamContainerRef (fromMaybe (namedNode "error") opts.predicate) $ Array.fromFoldable opts.dataProviders
+  case opts.experiment of 
+    Nothing -> onSignal SIGTERM (exit 0)
+    Just Throughput -> onSignal SIGTERM (printThroughput counterRef now)
+    Just Latency -> onSignal SIGTERM (printLatency latenciesRef)
+  _ <- setupProvideData opts counterRef latenciesRef streamContainerRef (fromMaybe (namedNode "error") opts.predicate) $ Array.fromFoldable opts.dataProviders
   _ <- modify_ (\sc -> foldr addWindowToStreamContainer sc opts.windows) streamContainerRef
   time <- nowDateTime
-  serve (port opts) (router opts counterRef streamContainerRef) $ log $ "[INFO]\t[" <> format (UnixTimestamp : Nil) time <> "] Server up at " <> URI.print uriOptions opts.uri
+  serve (port opts) (router opts counterRef latenciesRef streamContainerRef) $ log $ "[INFO]\t[" <> format (UnixTimestamp : Nil) time <> "] Server up at " <> URI.print uriOptions opts.uri
     where
       port :: Options -> Int
       port opts = fromMaybe 8080 $ toInt <$> preview (_hierPart <<< _authority <<< _hosts <<< _Just <<< _That) opts.uri
